@@ -8,6 +8,7 @@ package enum ErrorKind {
     out_of_memory
     unsupported
     abi_mismatch
+    invalid_input
     native_failure
 }
 
@@ -18,6 +19,31 @@ package struct Error {
 
 package struct FaceData { let library:uint; let face:uint }
 package struct Bounds { let x:float64; let y:float64; let width:float64; let height:float64 }
+package struct ShapeFeature { let tag:uint32; let value:uint32; let start:uint32; let end:uint32 }
+package struct ShapedGlyph {
+    let id:uint32
+    let cluster_start:int
+    let cluster_end:int
+    let x_advance:int
+    let y_advance:int
+    let x_offset:int
+    let y_offset:int
+    let x_origin:int
+    let y_origin:int
+    let has_ink:bool
+    let x_bearing:int
+    let y_bearing:int
+    let width:int
+    let height:int
+}
+package struct ShapeData {
+    let direction:int
+    let script:str
+    let language:str
+    let glyphs:ShapedGlyph[]
+    let x_advance:int
+    let y_advance:int
+}
 
 package func open(bytes:uint8[], face_index:int) Result<FaceData, Error> {
     match verify_abi() {
@@ -116,6 +142,68 @@ package func scalar_bounds(handle:uint, scalar:uint32, units_per_em:int) Bounds?
     )
 }
 
+package func shape(
+    handle:uint,
+    text:str,
+    direction:int,
+    script:str,
+    language:str,
+    features:ShapeFeature[]
+) Result<ShapeData, Error> {
+    var script_tag:uint32 = 0 as uint32
+    if script != "" { script_tag = tag(script) }
+    let raw = C.address_bits(shape_create(
+        C.pointer_bits(handle), C.pointer(text), C.byte_count(text), direction as int32,
+        script_tag, C.pointer(language), C.byte_count(language)
+    ))
+    if raw == 0 as uint { return Result<ShapeData, Error>.failure(last_error()) }
+    for feature in features {
+        if shape_add_feature(
+            C.pointer_bits(raw), feature.tag, feature.value, feature.start, feature.end
+        ) == 0 {
+            let error = last_error()
+            shape_destroy(C.pointer_bits(raw))
+            return Result<ShapeData, Error>.failure(error)
+        }
+    }
+    if shape_finish(C.pointer_bits(raw)) == 0 {
+        let error = last_error()
+        shape_destroy(C.pointer_bits(raw))
+        return Result<ShapeData, Error>.failure(error)
+    }
+    var glyphs:ShapedGlyph[] = []
+    var index = 0
+    while index < shape_glyph_count(C.pointer_bits(raw)) as int {
+        glyphs.append(ShapedGlyph(
+            id:shape_glyph_id(C.pointer_bits(raw), index as uint32),
+            cluster_start:shape_glyph_cluster_start(C.pointer_bits(raw), index as uint32) as int,
+            cluster_end:shape_glyph_cluster_end(C.pointer_bits(raw), index as uint32) as int,
+            x_advance:signed32(shape_glyph_x_advance(C.pointer_bits(raw), index as uint32)),
+            y_advance:signed32(shape_glyph_y_advance(C.pointer_bits(raw), index as uint32)),
+            x_offset:signed32(shape_glyph_x_offset(C.pointer_bits(raw), index as uint32)),
+            y_offset:signed32(shape_glyph_y_offset(C.pointer_bits(raw), index as uint32)),
+            x_origin:signed32(shape_glyph_x_origin(C.pointer_bits(raw), index as uint32)),
+            y_origin:signed32(shape_glyph_y_origin(C.pointer_bits(raw), index as uint32)),
+            has_ink:shape_glyph_has_ink(C.pointer_bits(raw), index as uint32) != 0,
+            x_bearing:signed32(shape_glyph_x_bearing(C.pointer_bits(raw), index as uint32)),
+            y_bearing:signed32(shape_glyph_y_bearing(C.pointer_bits(raw), index as uint32)),
+            width:signed32(shape_glyph_width(C.pointer_bits(raw), index as uint32)),
+            height:signed32(shape_glyph_height(C.pointer_bits(raw), index as uint32))
+        ))
+        index++
+    }
+    let result = ShapeData(
+        direction:shape_direction(C.pointer_bits(raw)) as int,
+        script:copy_text(tag_text(shape_script(C.pointer_bits(raw)))),
+        language:copy_text(shape_language(C.pointer_bits(raw))),
+        glyphs:glyphs,
+        x_advance:signed32(shape_x_advance(C.pointer_bits(raw))),
+        y_advance:signed32(shape_y_advance(C.pointer_bits(raw)))
+    )
+    shape_destroy(C.pointer_bits(raw))
+    return Result<ShapeData, Error>.success(result)
+}
+
 package func abi_version_value() int { return abi_version() as int }
 package func abi_pointer_size_value() int { return abi_pointer_size() as int }
 package func abi_size_size_value() int { return abi_size_size() as int }
@@ -123,10 +211,25 @@ package func abi_pointer_alignment_value() int { return abi_pointer_alignment() 
 package func live_library_count() int { return boundary_live_library_count() as int }
 package func live_face_count() int { return boundary_live_face_count() as int }
 package func live_instance_count() int { return boundary_live_instance_count() as int }
+package func instance_shape_count(handle:uint) int { return boundary_instance_shape_count(C.pointer_bits(handle)) as int }
+
+package func rejects_invalid_utf8_for_test(handle:uint) bool {
+    let invalid:uint8[] = [195 as uint8, 40 as uint8]
+    let packed = C.string(@invalid[0:invalid.count()])
+    let raw = C.address_bits(shape_create(
+        C.pointer_bits(handle), C.pointer(packed), C.byte_count(packed), 1 as int32,
+        0 as uint32, C.pointer("und"), C.byte_count("und")
+    ))
+    if raw != 0 as uint {
+        shape_destroy(C.pointer_bits(raw))
+        return false
+    }
+    return boundary_last_error_code() == 8
+}
 
 func verify_abi() Result<void, Error> {
-    if abi_version() != 2 as uint32 {
-        return Result<void, Error>.failure(Error(kind:ErrorKind.abi_mismatch, detail:"GFX.Font expected native ABI version 2"))
+    if abi_version() != 3 as uint32 {
+        return Result<void, Error>.failure(Error(kind:ErrorKind.abi_mismatch, detail:"GFX.Font expected native ABI version 3"))
     }
     if abi_pointer_size() != 8 as uint32 || abi_size_size() != 8 as uint32 || abi_pointer_alignment() != 8 as uint32 {
         return Result<void, Error>.failure(Error(kind:ErrorKind.abi_mismatch, detail:"GFX.Font requires the 64-bit Silex ABI layout"))
@@ -143,6 +246,7 @@ func last_error() Error {
     if code == 4 { kind = ErrorKind.out_of_memory }
     if code == 5 { kind = ErrorKind.unsupported }
     if code == 6 { kind = ErrorKind.abi_mismatch }
+    if code == 8 { kind = ErrorKind.invalid_input }
     return Error(kind:kind, detail:copy_text(boundary_last_error_detail()))
 }
 
@@ -208,6 +312,31 @@ let instance_create = C.function<func(C.Pointer<uint8>) C.Pointer<uint8> >(libra
 let instance_set_variation = C.function<func(C.Pointer<uint8>, uint32, float32) int32>(library:Boundary.FontBoundary, name:"silex_font_instance_set_variation")
 let instance_destroy = C.function<func(C.Pointer<uint8>) void>(library:Boundary.FontBoundary, name:"silex_font_instance_destroy")
 let instance_scalar_bounds = C.function<func(C.Pointer<uint8>, uint32, C.MutablePointer<int32>, C.MutablePointer<int32>, C.MutablePointer<int32>, C.MutablePointer<int32>) int32>(library:Boundary.FontBoundary, name:"silex_font_instance_scalar_bounds")
+let shape_create = C.function<func(C.Pointer<uint8>, C.Pointer<uint8>, C.Size, int32, uint32, C.Pointer<uint8>, C.Size) C.Pointer<uint8> >(library:Boundary.FontBoundary, name:"silex_font_shape_create")
+let shape_add_feature = C.function<func(C.Pointer<uint8>, uint32, uint32, uint32, uint32) int32>(library:Boundary.FontBoundary, name:"silex_font_shape_add_feature")
+let shape_finish = C.function<func(C.Pointer<uint8>) int32>(library:Boundary.FontBoundary, name:"silex_font_shape_finish")
+let shape_destroy = C.function<func(C.Pointer<uint8>) void>(library:Boundary.FontBoundary, name:"silex_font_shape_destroy")
+let shape_glyph_count = C.function<func(C.Pointer<uint8>) uint32>(library:Boundary.FontBoundary, name:"silex_font_shape_glyph_count")
+let shape_direction = C.function<func(C.Pointer<uint8>) int32>(library:Boundary.FontBoundary, name:"silex_font_shape_direction")
+let shape_script = C.function<func(C.Pointer<uint8>) uint32>(library:Boundary.FontBoundary, name:"silex_font_shape_script")
+let shape_language = C.function<func(C.Pointer<uint8>) C.Pointer<uint8> >(library:Boundary.FontBoundary, name:"silex_font_shape_language")
+let shape_glyph_id = C.function<func(C.Pointer<uint8>, uint32) uint32>(library:Boundary.FontBoundary, name:"silex_font_shape_glyph_id")
+let shape_glyph_cluster_start = C.function<func(C.Pointer<uint8>, uint32) uint32>(library:Boundary.FontBoundary, name:"silex_font_shape_glyph_cluster_start")
+let shape_glyph_cluster_end = C.function<func(C.Pointer<uint8>, uint32) uint32>(library:Boundary.FontBoundary, name:"silex_font_shape_glyph_cluster_end")
+let shape_glyph_x_advance = C.function<func(C.Pointer<uint8>, uint32) int32>(library:Boundary.FontBoundary, name:"silex_font_shape_glyph_x_advance")
+let shape_glyph_y_advance = C.function<func(C.Pointer<uint8>, uint32) int32>(library:Boundary.FontBoundary, name:"silex_font_shape_glyph_y_advance")
+let shape_glyph_x_offset = C.function<func(C.Pointer<uint8>, uint32) int32>(library:Boundary.FontBoundary, name:"silex_font_shape_glyph_x_offset")
+let shape_glyph_y_offset = C.function<func(C.Pointer<uint8>, uint32) int32>(library:Boundary.FontBoundary, name:"silex_font_shape_glyph_y_offset")
+let shape_glyph_x_origin = C.function<func(C.Pointer<uint8>, uint32) int32>(library:Boundary.FontBoundary, name:"silex_font_shape_glyph_x_origin")
+let shape_glyph_y_origin = C.function<func(C.Pointer<uint8>, uint32) int32>(library:Boundary.FontBoundary, name:"silex_font_shape_glyph_y_origin")
+let shape_glyph_has_ink = C.function<func(C.Pointer<uint8>, uint32) int32>(library:Boundary.FontBoundary, name:"silex_font_shape_glyph_has_ink")
+let shape_glyph_x_bearing = C.function<func(C.Pointer<uint8>, uint32) int32>(library:Boundary.FontBoundary, name:"silex_font_shape_glyph_x_bearing")
+let shape_glyph_y_bearing = C.function<func(C.Pointer<uint8>, uint32) int32>(library:Boundary.FontBoundary, name:"silex_font_shape_glyph_y_bearing")
+let shape_glyph_width = C.function<func(C.Pointer<uint8>, uint32) int32>(library:Boundary.FontBoundary, name:"silex_font_shape_glyph_width")
+let shape_glyph_height = C.function<func(C.Pointer<uint8>, uint32) int32>(library:Boundary.FontBoundary, name:"silex_font_shape_glyph_height")
+let shape_x_advance = C.function<func(C.Pointer<uint8>) int32>(library:Boundary.FontBoundary, name:"silex_font_shape_x_advance")
+let shape_y_advance = C.function<func(C.Pointer<uint8>) int32>(library:Boundary.FontBoundary, name:"silex_font_shape_y_advance")
+let boundary_instance_shape_count = C.function<func(C.Pointer<uint8>) uint32>(library:Boundary.FontBoundary, name:"silex_font_instance_shape_count")
 let boundary_last_error_code = C.function<func() int32>(library:Boundary.FontBoundary, name:"silex_font_last_error_code")
 let boundary_last_error_detail = C.function<func() C.Pointer<uint8> >(library:Boundary.FontBoundary, name:"silex_font_last_error_detail")
 let boundary_live_library_count = C.function<func() uint32>(library:Boundary.FontBoundary, name:"silex_font_live_library_count")

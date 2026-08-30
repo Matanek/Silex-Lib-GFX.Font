@@ -10,6 +10,10 @@ on fonts installed on the host.
   `python3 make_collection.py Minimal.ttf NotoSansMono-Latin.ttf TwoFaces.ttc`.
 - `SourceCodePro-Regular.otf` is Adobe Source Code Pro 2.042 from the official
   `release/OTF` directory and supplies cubic CFF outlines.
+- `NotoSansArabic-Test.ttf` is a test-only subset of Google Fonts'
+  `NotoSansArabic[wdth,wght].ttf`, produced with
+  `hb-subset --text='العربية'`; it supplies RTL Arabic joining and mark
+  positioning without depending on an installed system font.
 
 Noto fixtures use `Licenses/NotoFonts.txt`. Source Code Pro uses
 `Licenses/SourceCodePro.txt`.
@@ -21,4 +25,5 @@ SHA-256 values:
 2f6b5d003682a161028c7ca5896d38e7770fb3963f3547cee7510c7f43b7da10  NotoSansMono-Latin.ttf
 da13544b3ad9043344f2b95a010cbfb3ed31b1cde474dd2f1f690f082208988d  TwoFaces.ttc
 9f9664e2edf6f045c11e774f9bd0be6993971f2544a39061a5ce478b96b051f8  SourceCodePro-Regular.otf
+237ee0261ba315861ef1348098705ac90f65d1a3b65bcc4a5eaa8b79fa04107c  NotoSansArabic-Test.ttf
 ```

@@ -20,8 +20,8 @@ func exercise_native_lifetimes() {
     }
 }
 
-test "verify ABI v2 and release every native lifetime" {
-    assert(Native.abi_version_value() == 2)
+test "verify ABI v3 and release every native lifetime" {
+    assert(Native.abi_version_value() == 3)
     assert(Native.abi_pointer_size_value() == 8)
     assert(Native.abi_size_size_value() == 8)
     assert(Native.abi_pointer_alignment_value() == 8)
@@ -32,4 +32,68 @@ test "verify ABI v2 and release every native lifetime" {
     assert(Native.live_library_count() == 0)
     assert(Native.live_face_count() == 0)
     assert(Native.live_instance_count() == 0)
+}
+
+func require_instance(face:Font.Face) Font.Instance {
+    match Font.Instance.create(face, size:1000.0) {
+        failure(error) => { panic(error.detail) }
+        success(instance) => { return instance }
+    }
+}
+
+func require_run(instance:Font.Instance, text:str, options:Font.ShapeOptions) Font.GlyphRun {
+    match instance.shape(text, options) {
+        failure(error) => { panic(error.detail) }
+        success(run) => { return run }
+    }
+}
+
+test "cache reuses one native shape and distinguishes features" {
+    match Font.Face.default() {
+        failure(error) => { panic(error.detail) }
+        success(face) => {
+            var instance = require_instance(face)
+            let enabled = Font.ShapeOptions(
+                direction:Font.Direction.left_to_right,
+                script:"Latn",
+                language:"fr",
+                features:[Font.Feature("liga", 1)]
+            )
+            var first = require_run(instance, "office", enabled)
+            assert(first.glyph_count() == 4)
+            assert(instance.native_shape_count() == 1)
+            var second = require_run(instance, "office", enabled)
+            assert(second.glyph_count() == 4)
+            assert(instance.native_shape_count() == 1)
+            var disabled = require_run(instance, "office", Font.ShapeOptions(
+                direction:Font.Direction.left_to_right,
+                script:"Latn",
+                language:"fr",
+                features:[Font.Feature("liga", 0)]
+            ))
+            assert(disabled.glyph_count() == 6)
+            assert(instance.native_shape_count() == 2)
+
+            match Font.Instance.create(face, size:1000.0, variations:[Font.Variation("wght", 900.0)]) {
+                failure(error) => { panic(error.detail) }
+                success(black) => {
+                    var varied = require_run(black, "office", enabled)
+                    assert(black.identity() != instance.identity())
+                    assert(black.native_shape_count() == 1)
+                    assert(varied.metrics().advance.x != first.metrics().advance.x)
+                }
+            }
+        }
+    }
+}
+
+test "native boundary rejects invalid UTF-8 before HarfBuzz" {
+    match Font.Face.default() {
+        failure(error) => { panic(error.detail) }
+        success(face) => {
+            var instance = require_instance(face)
+            assert(Native.rejects_invalid_utf8_for_test(instance.native_handle()))
+            assert(instance.native_shape_count() == 0)
+        }
+    }
 }

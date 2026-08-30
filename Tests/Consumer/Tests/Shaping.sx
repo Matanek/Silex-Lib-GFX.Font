@@ -1,0 +1,191 @@
+use GFX.Font
+use STD.Math
+
+func shaping_face(result:Result<Font.Face, Font.Error>) Font.Face {
+    match result {
+        failure(error) => { panic(error.detail) }
+        success(face) => { return face }
+    }
+}
+
+func shaping_instance(face:Font.Face, size:float64 = 1000.0) Font.Instance {
+    match Font.Instance.create(face, size:size) {
+        failure(error) => { panic(error.detail) }
+        success(instance) => { return instance }
+    }
+}
+
+func shaped(instance:Font.Instance, text:str, options:Font.ShapeOptions = Font.ShapeOptions()) Font.GlyphRun {
+    match instance.shape(text, options) {
+        failure(error) => { panic(error.detail) }
+        success(run) => { return run }
+    }
+}
+
+func approximate(actual:float64, expected:float64) bool {
+    return Math.abs(actual - expected) < 0.000001
+}
+
+test "Latin ligature matches the pinned HarfBuzz oracle" {
+    var instance = shaping_instance(shaping_face(Font.Face.default()))
+    var run = shaped(instance, "office", Font.ShapeOptions(
+        direction:Font.Direction.left_to_right,
+        script:"Latn",
+        language:"fr",
+        features:[Font.Feature("liga", 1), Font.Feature("kern", 1)]
+    ))
+    let glyphs = run.glyphs()
+    assert(glyphs.count() == 4)
+    assert(glyphs[0].id == 82 as uint32)
+    assert(glyphs[1].id == 1656 as uint32)
+    assert(glyphs[2].id == 70 as uint32)
+    assert(glyphs[3].id == 72 as uint32)
+    assert(glyphs[1].cluster_start == 1)
+    assert(glyphs[1].cluster_end == 4)
+    assert(approximate(glyphs[0].advance_x, 605.0))
+    assert(approximate(glyphs[1].advance_x, 946.0))
+    assert(approximate(run.metrics().advance.x, 2595.0))
+    assert(run.metrics().advance.y == 0.0)
+    assert(run.metrics().logical_bounds.width == 2595.0)
+    assert(run.metrics().ink_bounds != null)
+    assert(run.script() == "Latn")
+    assert(run.language() == "fr")
+}
+
+test "combining marks share one cluster without adding advance" {
+    var instance = shaping_instance(shaping_face(Font.Face.default()))
+    var run = shaped(instance, "a\u{0323}\u{0301}", Font.ShapeOptions(
+        direction:Font.Direction.left_to_right,
+        script:"Latn",
+        language:"und"
+    ))
+    let glyphs = run.glyphs()
+    assert(glyphs.count() == 2)
+    assert(glyphs[0].id == 759 as uint32)
+    assert(glyphs[1].id == 2665 as uint32)
+    assert(glyphs[0].cluster_start == 0 && glyphs[0].cluster_end == 5)
+    assert(glyphs[1].cluster_start == 0 && glyphs[1].cluster_end == 5)
+    assert(glyphs[1].advance_x == 0.0)
+    assert(glyphs[1].offset_x != 0.0 || glyphs[1].offset_y != 0.0)
+}
+
+test "Devanagari Greek Cyrillic and variation selectors retain scalar clusters" {
+    var instance = shaping_instance(shaping_face(Font.Face.default()))
+    var devanagari = shaped(instance, "देवनागरी", Font.ShapeOptions(
+        direction:Font.Direction.left_to_right,
+        script:"Deva",
+        language:"hi"
+    ))
+    assert(devanagari.glyph_count() == 8)
+    assert(devanagari.glyphs()[0].id == 3906 as uint32)
+    assert(devanagari.glyphs()[1].advance_x == 0.0)
+    assert(devanagari.script() == "Deva")
+
+    var greek = shaped(instance, "Ελληνικά")
+    assert(greek.script() == "Grek")
+    assert(greek.glyph_count() == 8)
+    var cyrillic = shaped(instance, "Кириллица")
+    assert(cyrillic.script() == "Cyrl")
+    assert(cyrillic.glyph_count() == 9)
+
+    var selector = shaped(instance, "A\u{FE0F}", Font.ShapeOptions(script:"Latn"))
+    assert(selector.glyph_count() == 2)
+    assert(selector.glyphs()[0].cluster_start == 0)
+    assert(selector.glyphs()[0].cluster_end == 4)
+    assert(selector.glyphs()[1].cluster_start == 0)
+    assert(selector.glyphs()[1].advance_x == 0.0)
+}
+
+test "Arabic RTL glyph order preserves descending UTF-8 clusters" {
+    var face = shaping_face(Font.Face.decode(embed_bytes("../../Fixtures/NotoSansArabic-Test.ttf")))
+    var instance = shaping_instance(face)
+    var run = shaped(instance, "العربية", Font.ShapeOptions(
+        direction:Font.Direction.right_to_left,
+        script:"Arab",
+        language:"ar"
+    ))
+    let glyphs = run.glyphs()
+    assert(run.direction() == Font.Direction.right_to_left)
+    assert(run.script() == "Arab")
+    assert(glyphs.count() == 10)
+    assert(glyphs[0].cluster_start == 12)
+    assert(glyphs[1].cluster_start == 12)
+    assert(glyphs[-1].cluster_start == 0)
+    var index = 1
+    while index < glyphs.count() {
+        assert(glyphs[index].cluster_start <= glyphs[index - 1].cluster_start)
+        assert(glyphs[index].cluster_start % 2 == 0)
+        index++
+    }
+}
+
+test "vertical direction produces positioned glyphs on the Y axis" {
+    var instance = shaping_instance(shaping_face(Font.Face.default()))
+    var run = shaped(instance, "vertical", Font.ShapeOptions(
+        direction:Font.Direction.top_to_bottom,
+        script:"Latn",
+        language:"en"
+    ))
+    assert(run.direction() == Font.Direction.top_to_bottom)
+    assert(run.glyph_count() == 8)
+    assert(run.metrics().advance.x == 0.0)
+    assert(run.metrics().advance.y < 0.0)
+    assert(run.glyphs()[0].origin().x != 0.0)
+    assert(run.glyphs()[1].origin().y < run.glyphs()[0].origin().y)
+}
+
+test "empty spaces and notdef distinguish logical advance from ink" {
+    var instance = shaping_instance(shaping_face(Font.Face.default()), size:20.0)
+    var empty = shaped(instance, "")
+    assert(empty.glyph_count() == 0)
+    assert(empty.metrics().advance.x == 0.0)
+    assert(empty.metrics().ink_bounds == null)
+    assert(empty.metrics().line_height > 0.0)
+
+    var space = shaped(instance, " ")
+    assert(space.glyph_count() == 1)
+    assert(space.metrics().advance.x > 0.0)
+    assert(space.metrics().ink_bounds == null)
+
+    var missing = shaped(instance, "\u{10FFFF}")
+    assert(missing.glyph_count() == 1)
+    assert(missing.glyphs()[0].is_notdef())
+    assert(missing.missing_glyph_count() == 1)
+}
+
+func retained_run() Font.GlyphRun {
+    var instance = shaping_instance(shaping_face(Font.Face.default()), size:18.0)
+    return shaped(instance, "retained", Font.ShapeOptions(language:"en"))
+}
+
+test "run owns copied text glyphs and positions after native buffers are gone" {
+    var run = retained_run()
+    assert(run.text() == "retained")
+    assert(run.glyph_count() == 8)
+    assert(run.instance().size() == 18.0)
+    assert(run.glyphs()[0].cluster().start == 0)
+}
+
+test "invalid shaping options return deterministic typed errors" {
+    var instance = shaping_instance(shaping_face(Font.Face.default()))
+    match instance.shape("line\nbreak") {
+        success(run) => { panic("a line break entered one homogeneous run") }
+        failure(error) => { match error.kind { invalid_text => {}; else => { panic("line break returned the wrong error") } } }
+    }
+    match instance.shape("é", Font.ShapeOptions(features:[Font.Feature("liga", 1, start:1)])) {
+        success(run) => { panic("a feature range split one UTF-8 scalar") }
+        failure(error) => { match error.kind { invalid_feature_range => {}; else => { panic("split scalar returned the wrong error") } } }
+    }
+    match instance.shape("office", Font.ShapeOptions(features:[Font.Feature("bad", 1)])) {
+        success(run) => { panic("a short feature tag was accepted") }
+        failure(error) => { match error.kind { invalid_tag => {}; else => { panic("short feature tag returned the wrong error") } } }
+    }
+    match instance.shape("office", Font.ShapeOptions(script:"Latin")) {
+        success(run) => { panic("a long script tag was accepted") }
+        failure(error) => { match error.kind { invalid_tag => {}; else => { panic("long script tag returned the wrong error") } } }
+    }
+    match instance.shape("office", Font.ShapeOptions(language:"fr--CA")) {
+        success(run) => { panic("an invalid language tag was accepted") }
+        failure(error) => { match error.kind { invalid_language => {}; else => { panic("invalid language returned the wrong error") } } }
+    }
+}

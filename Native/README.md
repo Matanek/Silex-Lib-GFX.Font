@@ -1,6 +1,6 @@
 # Rebuild the GFX.Font boundary
 
-GFX.Font owns private C ABI v2 over two exact upstream releases:
+GFX.Font owns private C ABI v3 over two exact upstream releases:
 
 - FreeType 2.14.3, tag commit
   `0a0221a1347e2f1e07c395263540026e9a0aa7c7`, source SHA-256
@@ -34,6 +34,12 @@ It exposes face names, em metrics, Unicode coverage, variation axes, and named
 instances as C scalars and copied UTF-8 text. Each public font instance owns a
 separate HarfBuzz font and its effective coordinates; public Silex values never
 expose a FreeType or HarfBuzz handle.
+
+ABI v3 also shapes one retained UTF-8 run through an opaque query handle. The
+shim validates scalar-aligned feature ranges, asks HarfBuzz for monotone
+grapheme clusters, copies glyph IDs, cluster ranges, advances, offsets,
+origins, and extents, then releases the HarfBuzz buffer before Silex receives
+its public `GlyphRun` values.
 
 The source archives and expanded upstream trees are build inputs and are not
 committed. `Boundary/SHA256SUMS.txt` and every target's

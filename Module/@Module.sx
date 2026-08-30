@@ -12,6 +12,9 @@ public enum ErrorKind {
     face_index_out_of_range
     invalid_size
     invalid_tag
+    invalid_text
+    invalid_language
+    invalid_feature_range
     unknown_axis
     duplicate_axis
     variation_out_of_range
@@ -98,6 +101,135 @@ public struct Bounds {
     let y:float64
     let width:float64
     let height:float64
+}
+
+public enum Direction {
+    left_to_right
+    right_to_left
+    top_to_bottom
+    bottom_to_top
+}
+
+public struct Position { let x:float64; let y:float64 }
+public struct Cluster { let start:int; let end:int }
+
+public struct Feature {
+    let tag:str
+    let value:int
+    let start:int
+    let end:int
+
+    init(tag:str, value:int = 1, start:int = 0, end:int = -1) {
+        self.tag = tag
+        self.value = value
+        self.start = start
+        self.end = end
+    }
+}
+
+public struct ShapeOptions {
+    let direction:Direction?
+    let script:str?
+    let language:str?
+    let features:Feature[]
+
+    init(
+        direction:Direction? = null,
+        script:str? = null,
+        language:str? = null,
+        features:Feature[] = []
+    ) {
+        self.direction = direction
+        self.script = script
+        self.language = language
+        self.features = features
+    }
+}
+
+public struct Glyph {
+    let id:uint32
+    let cluster_start:int
+    let cluster_end:int
+    let advance_x:float64
+    let advance_y:float64
+    let offset_x:float64
+    let offset_y:float64
+    let origin_x:float64
+    let origin_y:float64
+    let ink:Bounds?
+
+    func origin() Position { return Position(x:self.origin_x, y:self.origin_y) }
+    func advance() Position { return Position(x:self.advance_x, y:self.advance_y) }
+    func offset() Position { return Position(x:self.offset_x, y:self.offset_y) }
+    func cluster() Cluster { return Cluster(start:self.cluster_start, end:self.cluster_end) }
+    func ink_bounds() Bounds? { return self.ink }
+    func is_notdef() bool { return self.id == 0 as uint32 }
+}
+
+public struct RunMetrics {
+    let advance:Position
+    let logical_bounds:Bounds
+    let ink_bounds:Bounds?
+    let baseline:float64
+    let ascender:float64
+    let descender:float64
+    let line_height:float64
+}
+
+struct GlyphRunData {
+    let text:str
+    let direction:Direction
+    let script:str
+    let language:str
+    let glyphs:Glyph[]
+    let metrics:RunMetrics
+
+    init(
+        text:str,
+        direction:Direction,
+        script:str,
+        language:str,
+        glyphs:Glyph[],
+        metrics:RunMetrics
+    ) {
+        self.text = text
+        self.direction = direction
+        self.script = script
+        self.language = language
+        self.glyphs = glyphs
+        self.metrics = metrics
+    }
+}
+
+struct ShapeCacheEntry { let key:str; let data:GlyphRunData }
+
+class ShapeCache {
+    private var entries:ShapeCacheEntry[] = []
+    private var cursor:int = 0
+
+    func find(key:str) GlyphRunData? {
+        for entry in self.entries {
+            if entry.key == key { return entry.data }
+        }
+        return null
+    }
+
+    func insert(key:str, data:GlyphRunData) {
+        let entry = ShapeCacheEntry(key:key, data:data)
+        if self.entries.count() < 64 {
+            self.entries.append(entry)
+        } else {
+            self.entries[self.cursor] = entry
+            self.cursor = (self.cursor + 1) % 64
+        }
+    }
+}
+struct ValidatedShape {
+    let key:str
+    let direction:int
+    let script:str
+    let language:str
+    let features:Native.ShapeFeature[]
 }
 
 public class Face {
@@ -246,6 +378,7 @@ public class Instance {
     private let effective_variations:Variation[]
     private let requested_synthesis:Synthesis
     private let stable_identity:str
+    private var shaping_cache:ShapeCache
 
     private init(
         face:Face,
@@ -261,6 +394,7 @@ public class Instance {
         self.effective_variations = variations
         self.requested_synthesis = synthesis
         self.stable_identity = identity
+        self.shaping_cache = ShapeCache()
     }
 
     drop {
@@ -340,6 +474,281 @@ public class Instance {
         }
         return null
     }
+
+    func shape(text:str, options:ShapeOptions = ShapeOptions()) Result<GlyphRun, Error> {
+        match validated_shape(text, options) {
+            failure(error) => { return Result<GlyphRun, Error>.failure(error) }
+            success(validated) => {
+                if cached = self.shaping_cache.find(validated.key) {
+                    return Result<GlyphRun, Error>.success(GlyphRun(self, cached))
+                }
+                match Native.shape(
+                    self.instance_handle,
+                    text,
+                    validated.direction,
+                    validated.script,
+                    validated.language,
+                    validated.features
+                ) {
+                    failure(error) => { return Result<GlyphRun, Error>.failure(public_error(error)) }
+                    success(shaped) => {
+                        let data = glyph_run_data(self, text, shaped)
+                        self.shaping_cache.insert(validated.key, data)
+                        return Result<GlyphRun, Error>.success(GlyphRun(self, data))
+                    }
+                }
+            }
+        }
+    }
+
+    package func native_handle() uint { return self.instance_handle }
+    package func native_shape_count() int { return Native.instance_shape_count(self.instance_handle) }
+}
+
+public class GlyphRun {
+    private var instance_value:Instance
+    private let data:GlyphRunData
+
+    module init(instance:Instance, data:GlyphRunData) {
+        self.instance_value = instance
+        self.data = data
+    }
+
+    func instance() Instance { return self.instance_value }
+    func text() str { return self.data.text }
+    func direction() Direction { return self.data.direction }
+    func script() str { return self.data.script }
+    func language() str { return self.data.language }
+    func glyphs() Glyph[] { return self.data.glyphs }
+    func metrics() RunMetrics { return self.data.metrics }
+    func glyph_count() int { return self.data.glyphs.count() }
+
+    func missing_glyph_count() int {
+        var count = 0
+        for glyph in self.data.glyphs {
+            if glyph.is_notdef() { count++ }
+        }
+        return count
+    }
+}
+
+func validated_shape(text:str, options:ShapeOptions) Result<ValidatedShape, Error> {
+    let text_bytes = UTF8.bytes(text)
+    for byte in text_bytes {
+        if byte == 10 || byte == 13 {
+            return Result<ValidatedShape, Error>.failure(Error(
+                kind:ErrorKind.invalid_text,
+                detail:"font shaping accepts one homogeneous run without line breaks"
+            ))
+        }
+    }
+
+    var script = ""
+    if value = options.script { script = value }
+    if script != "" {
+        let bytes = UTF8.bytes(script)
+        if bytes.count() != 4 || !ascii_letters(bytes) {
+            return Result<ValidatedShape, Error>.failure(Error(
+                kind:ErrorKind.invalid_tag,
+                detail:"font shaping scripts use four-letter ISO 15924 tags"
+            ))
+        }
+    }
+
+    var language = "und"
+    if value = options.language { language = value }
+    if !valid_language(language) {
+        return Result<ValidatedShape, Error>.failure(Error(
+            kind:ErrorKind.invalid_language,
+            detail:"font shaping language must be a non-empty BCP 47 or HarfBuzz-compatible tag"
+        ))
+    }
+
+    let direction = direction_code(options.direction)
+    var native_features:Native.ShapeFeature[] = []
+    var key = Crypto.sha256(@text_bytes[0:text_bytes.count()]) + "|d=$(direction)|s=$(script)|l=$(language)"
+    for feature in options.features {
+        let tag_bytes = UTF8.bytes(feature.tag)
+        if tag_bytes.count() != 4 || !printable_ascii(tag_bytes) {
+            return Result<ValidatedShape, Error>.failure(Error(
+                kind:ErrorKind.invalid_tag,
+                detail:"OpenType feature tags must contain exactly four printable ASCII bytes"
+            ))
+        }
+        if feature.value < 0 || feature.value > 4294967295 {
+            return Result<ValidatedShape, Error>.failure(Error(
+                kind:ErrorKind.invalid_feature_range,
+                detail:"OpenType feature values must fit an unsigned 32-bit integer"
+            ))
+        }
+        var end = feature.end
+        if end == -1 { end = text_bytes.count() }
+        if feature.start < 0 || end < feature.start || end > text_bytes.count() ||
+            !scalar_boundary(text_bytes, feature.start) || !scalar_boundary(text_bytes, end) {
+            return Result<ValidatedShape, Error>.failure(Error(
+                kind:ErrorKind.invalid_feature_range,
+                detail:"OpenType feature ranges use ordered UTF-8 byte offsets on scalar boundaries"
+            ))
+        }
+        let tag = Native.tag(feature.tag)
+        native_features.append(Native.ShapeFeature(
+            tag:tag,
+            value:feature.value as uint32,
+            start:feature.start as uint32,
+            end:end as uint32
+        ))
+        key = key + "|f=$(tag):$(feature.value):$(feature.start):$(end)"
+    }
+    return Result<ValidatedShape, Error>.success(ValidatedShape(
+        key:key,
+        direction:direction,
+        script:script,
+        language:language,
+        features:native_features
+    ))
+}
+
+func glyph_run_data(instance:Instance, text:str, shaped:Native.ShapeData) GlyphRunData {
+    let upem = instance.face().units_per_em() as float64
+    let scale = instance.size() / upem
+    var glyphs:Glyph[] = []
+    var run_ink:Bounds? = null
+    for shaped_glyph in shaped.glyphs {
+        var ink:Bounds? = null
+        if shaped_glyph.has_ink {
+            let first_x = (shaped_glyph.x_origin + shaped_glyph.x_bearing) as float64 * scale
+            let first_y = (shaped_glyph.y_origin + shaped_glyph.y_bearing) as float64 * scale
+            let second_x = first_x + shaped_glyph.width as float64 * scale
+            let second_y = first_y + shaped_glyph.height as float64 * scale
+            let bounds = Bounds(
+                x:Math.min(first_x, second_x),
+                y:Math.min(first_y, second_y),
+                width:Math.abs(second_x - first_x),
+                height:Math.abs(second_y - first_y)
+            )
+            ink = bounds
+            run_ink = combined_bounds(run_ink, bounds)
+        }
+        glyphs.append(Glyph(
+            id:shaped_glyph.id,
+            cluster_start:shaped_glyph.cluster_start,
+            cluster_end:shaped_glyph.cluster_end,
+            advance_x:shaped_glyph.x_advance as float64 * scale,
+            advance_y:shaped_glyph.y_advance as float64 * scale,
+            offset_x:shaped_glyph.x_offset as float64 * scale,
+            offset_y:shaped_glyph.y_offset as float64 * scale,
+            origin_x:shaped_glyph.x_origin as float64 * scale,
+            origin_y:shaped_glyph.y_origin as float64 * scale,
+            ink:ink
+        ))
+    }
+
+    let direction = public_direction(shaped.direction)
+    let advance = Position(
+        x:shaped.x_advance as float64 * scale,
+        y:shaped.y_advance as float64 * scale
+    )
+    let line = instance.metrics()
+    var logical = Bounds(
+        x:Math.min(0.0, advance.x),
+        y:line.descender,
+        width:Math.abs(advance.x),
+        height:line.line_height
+    )
+    if shaped.direction == 3 || shaped.direction == 4 {
+        logical = Bounds(
+            x:line.descender,
+            y:Math.min(0.0, advance.y),
+            width:line.line_height,
+            height:Math.abs(advance.y)
+        )
+    }
+    return GlyphRunData(
+        text:text,
+        direction:direction,
+        script:shaped.script,
+        language:shaped.language,
+        glyphs:glyphs,
+        metrics:RunMetrics(
+            advance:advance,
+            logical_bounds:logical,
+            ink_bounds:run_ink,
+            baseline:0.0,
+            ascender:line.ascender,
+            descender:line.descender,
+            line_height:line.line_height
+        )
+    )
+}
+
+func combined_bounds(current:Bounds?, next:Bounds) Bounds? {
+    if value = current {
+        let minimum_x = Math.min(value.x, next.x)
+        let minimum_y = Math.min(value.y, next.y)
+        let maximum_x = Math.max(value.x + value.width, next.x + next.width)
+        let maximum_y = Math.max(value.y + value.height, next.y + next.height)
+        return Bounds(
+            x:minimum_x,
+            y:minimum_y,
+            width:maximum_x - minimum_x,
+            height:maximum_y - minimum_y
+        )
+    }
+    return next
+}
+
+func direction_code(direction:Direction?) int {
+    if value = direction {
+        match value {
+            left_to_right => { return 1 }
+            right_to_left => { return 2 }
+            top_to_bottom => { return 3 }
+            bottom_to_top => { return 4 }
+        }
+    }
+    return 0
+}
+
+func public_direction(value:int) Direction {
+    if value == 2 { return Direction.right_to_left() }
+    if value == 3 { return Direction.top_to_bottom() }
+    if value == 4 { return Direction.bottom_to_top() }
+    return Direction.left_to_right()
+}
+
+func scalar_boundary(bytes:uint8[], offset:int) bool {
+    if offset == bytes.count() { return true }
+    if offset < 0 || offset > bytes.count() { return false }
+    return bytes[offset] < 128 || bytes[offset] > 191
+}
+
+func ascii_letters(bytes:uint8[]) bool {
+    for byte in bytes {
+        if !((byte >= 65 && byte <= 90) || (byte >= 97 && byte <= 122)) { return false }
+    }
+    return true
+}
+
+func printable_ascii(bytes:uint8[]) bool {
+    for byte in bytes {
+        if byte < 32 || byte > 126 { return false }
+    }
+    return true
+}
+
+func valid_language(language:str) bool {
+    let bytes = UTF8.bytes(language)
+    if bytes.count() == 0 || bytes.count() >= 64 { return false }
+    if bytes[0] == 45 || bytes[0] == 95 || bytes[-1] == 45 || bytes[-1] == 95 { return false }
+    var previous_separator = false
+    for byte in bytes {
+        let alphanumeric = (byte >= 65 && byte <= 90) || (byte >= 97 && byte <= 122) || (byte >= 48 && byte <= 57)
+        let separator = byte == 45 || byte == 95
+        if !alphanumeric && !separator { return false }
+        if separator && previous_separator { return false }
+        previous_separator = separator
+    }
+    return true
 }
 
 func validated_variations(face:Face, requested:Variation[]) Result<Variation[], Error> {
@@ -426,6 +835,7 @@ func public_error(error:Native.Error) Error {
         out_of_memory => { kind = ErrorKind.out_of_memory }
         unsupported => { kind = ErrorKind.unsupported }
         abi_mismatch => { kind = ErrorKind.abi_mismatch }
+        invalid_input => { kind = ErrorKind.invalid_text }
         native_failure => { kind = ErrorKind.native_failure }
     }
     return Error(kind:kind, detail:error.detail)

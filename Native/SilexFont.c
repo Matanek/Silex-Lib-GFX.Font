@@ -1,6 +1,7 @@
 #include "SilexFont.h"
 
 #include <stdatomic.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -22,6 +23,7 @@
 #define LIBRARY_MAGIC UINT32_C(0x53464c42)
 #define FACE_MAGIC UINT32_C(0x53464643)
 #define INSTANCE_MAGIC UINT32_C(0x5346494e)
+#define SHAPE_MAGIC UINT32_C(0x53465348)
 
 typedef struct FontLibrary { uint32_t magic; } FontLibrary;
 
@@ -41,7 +43,45 @@ typedef struct FontInstance {
     hb_font_t *hb_font;
     hb_variation_t *variations;
     unsigned int variation_count;
+    uint32_t shape_count;
 } FontInstance;
+
+typedef struct FontGlyphRecord {
+    uint32_t id;
+    uint32_t cluster_start;
+    uint32_t cluster_end;
+    int32_t x_advance;
+    int32_t y_advance;
+    int32_t x_offset;
+    int32_t y_offset;
+    int32_t x_origin;
+    int32_t y_origin;
+    int32_t has_ink;
+    int32_t x_bearing;
+    int32_t y_bearing;
+    int32_t width;
+    int32_t height;
+} FontGlyphRecord;
+
+typedef struct FontShape {
+    uint32_t magic;
+    FontInstance *instance;
+    uint8_t *text;
+    size_t byte_count;
+    int32_t requested_direction;
+    uint32_t requested_script;
+    char requested_language[64];
+    hb_feature_t *features;
+    uint32_t feature_count;
+    FontGlyphRecord *glyphs;
+    uint32_t glyph_count;
+    int32_t direction;
+    uint32_t script;
+    char language[64];
+    int32_t x_advance;
+    int32_t y_advance;
+    int32_t finished;
+} FontShape;
 
 typedef struct FontState {
     FT_Library freetype;
@@ -119,6 +159,98 @@ static FontInstance *checked_instance(void *raw) {
         return NULL;
     }
     return instance;
+}
+
+static FontShape *checked_shape(void *raw) {
+    FontShape *shape = raw;
+    if (shape == NULL || shape->magic != SHAPE_MAGIC) {
+        fail(SILEX_FONT_INTERNAL, "a live font shape is required");
+        return NULL;
+    }
+    return shape;
+}
+
+static const FontShape *checked_finished_shape(const void *raw) {
+    const FontShape *shape = raw;
+    if (shape == NULL || shape->magic != SHAPE_MAGIC || !shape->finished) {
+        fail(SILEX_FONT_INTERNAL, "a finished font shape is required");
+        return NULL;
+    }
+    return shape;
+}
+
+static const FontGlyphRecord *checked_glyph(const void *raw, uint32_t index) {
+    const FontShape *shape = checked_finished_shape(raw);
+    if (shape == NULL || index >= shape->glyph_count) {
+        fail(SILEX_FONT_INTERNAL, "font shape glyph index is out of range");
+        return NULL;
+    }
+    return &shape->glyphs[index];
+}
+
+static int valid_utf8(const uint8_t *bytes, size_t count) {
+    size_t index = 0;
+    while (index < count) {
+        uint8_t first = bytes[index];
+        size_t length = 0;
+        if (first <= UINT8_C(0x7f)) length = 1;
+        else if (first >= UINT8_C(0xc2) && first <= UINT8_C(0xdf)) length = 2;
+        else if (first >= UINT8_C(0xe0) && first <= UINT8_C(0xef)) length = 3;
+        else if (first >= UINT8_C(0xf0) && first <= UINT8_C(0xf4)) length = 4;
+        else return 0;
+        if (index + length > count) return 0;
+        for (size_t continuation = 1; continuation < length; ++continuation) {
+            if (bytes[index + continuation] < UINT8_C(0x80) || bytes[index + continuation] > UINT8_C(0xbf)) return 0;
+        }
+        if (length >= 2) {
+            uint8_t second = bytes[index + 1];
+            if (first == UINT8_C(0xe0) && second < UINT8_C(0xa0)) return 0;
+            if (first == UINT8_C(0xed) && second >= UINT8_C(0xa0)) return 0;
+            if (first == UINT8_C(0xf0) && second < UINT8_C(0x90)) return 0;
+            if (first == UINT8_C(0xf4) && second > UINT8_C(0x8f)) return 0;
+        }
+        index += length;
+    }
+    return 1;
+}
+
+static int scalar_boundary(const uint8_t *bytes, size_t count, uint32_t offset) {
+    if ((size_t)offset > count) return 0;
+    if ((size_t)offset == count) return 1;
+    return bytes[offset] < UINT8_C(0x80) || bytes[offset] > UINT8_C(0xbf);
+}
+
+static int valid_language(const uint8_t *bytes, size_t count) {
+    if (count == 0 || count >= 64) return 0;
+    if (bytes[0] == '-' || bytes[0] == '_' || bytes[count - 1] == '-' || bytes[count - 1] == '_') return 0;
+    for (size_t index = 0; index < count; ++index) {
+        uint8_t value = bytes[index];
+        int alphanumeric = (value >= 'A' && value <= 'Z') || (value >= 'a' && value <= 'z') || (value >= '0' && value <= '9');
+        if (!alphanumeric && value != '-' && value != '_') return 0;
+        if (index > 0 && (value == '-' || value == '_') && (bytes[index - 1] == '-' || bytes[index - 1] == '_')) return 0;
+    }
+    return 1;
+}
+
+static hb_direction_t to_hb_direction(int32_t direction) {
+    if (direction == SILEX_FONT_DIRECTION_LEFT_TO_RIGHT) return HB_DIRECTION_LTR;
+    if (direction == SILEX_FONT_DIRECTION_RIGHT_TO_LEFT) return HB_DIRECTION_RTL;
+    if (direction == SILEX_FONT_DIRECTION_TOP_TO_BOTTOM) return HB_DIRECTION_TTB;
+    if (direction == SILEX_FONT_DIRECTION_BOTTOM_TO_TOP) return HB_DIRECTION_BTT;
+    return HB_DIRECTION_INVALID;
+}
+
+static int32_t from_hb_direction(hb_direction_t direction) {
+    if (direction == HB_DIRECTION_RTL) return SILEX_FONT_DIRECTION_RIGHT_TO_LEFT;
+    if (direction == HB_DIRECTION_TTB) return SILEX_FONT_DIRECTION_TOP_TO_BOTTOM;
+    if (direction == HB_DIRECTION_BTT) return SILEX_FONT_DIRECTION_BOTTOM_TO_TOP;
+    return SILEX_FONT_DIRECTION_LEFT_TO_RIGHT;
+}
+
+static int compare_u32(const void *left, const void *right) {
+    uint32_t a = *(const uint32_t *)left;
+    uint32_t b = *(const uint32_t *)right;
+    return a < b ? -1 : a > b ? 1 : 0;
 }
 
 static int get_axis(const FontFace *face, uint32_t index, hb_ot_var_axis_info_t *info) {
@@ -512,6 +644,281 @@ int32_t silex_font_instance_scalar_bounds(
     *width = extents.width;
     *height = extents.height;
     return 1;
+}
+
+void *silex_font_shape_create(
+    const void *raw_instance,
+    const uint8_t *utf8,
+    size_t byte_count,
+    int32_t direction,
+    uint32_t script,
+    const uint8_t *language,
+    size_t language_byte_count
+) {
+    clear_error();
+    FontInstance *instance = checked_instance((void *)raw_instance);
+    if (instance == NULL) return NULL;
+    if (byte_count > (size_t)INT_MAX || byte_count > UINT32_MAX || (byte_count > 0 && utf8 == NULL)) {
+        fail(SILEX_FONT_INVALID_INPUT, "font shaping requires a bounded UTF-8 buffer");
+        return NULL;
+    }
+    if (!valid_utf8(utf8, byte_count)) {
+        fail(SILEX_FONT_INVALID_INPUT, "font shaping text must be valid UTF-8");
+        return NULL;
+    }
+    for (size_t index = 0; index < byte_count; ++index) {
+        if (utf8[index] == '\n' || utf8[index] == '\r') {
+            fail(SILEX_FONT_INVALID_INPUT, "font shaping accepts one homogeneous run without line breaks");
+            return NULL;
+        }
+    }
+    if (direction < SILEX_FONT_DIRECTION_AUTO || direction > SILEX_FONT_DIRECTION_BOTTOM_TO_TOP) {
+        fail(SILEX_FONT_INVALID_INPUT, "font shaping direction is invalid");
+        return NULL;
+    }
+    if (script != 0) {
+        for (unsigned int shift = 0; shift < 32; shift += 8) {
+            uint8_t value = (uint8_t)((script >> shift) & UINT32_C(0xff));
+            if (!((value >= 'A' && value <= 'Z') || (value >= 'a' && value <= 'z'))) {
+                fail(SILEX_FONT_INVALID_INPUT, "font shaping script must be a four-letter ISO 15924 tag");
+                return NULL;
+            }
+        }
+    }
+    if (language_byte_count == 0) {
+        language = (const uint8_t *)"und";
+        language_byte_count = 3;
+    }
+    if (language == NULL || !valid_language(language, language_byte_count)) {
+        fail(SILEX_FONT_INVALID_INPUT, "font shaping language must be a valid HarfBuzz-compatible language tag");
+        return NULL;
+    }
+
+    FontShape *shape = calloc(1, sizeof(*shape));
+    if (shape == NULL) {
+        fail(SILEX_FONT_OUT_OF_MEMORY, "could not allocate the font shape handle");
+        return NULL;
+    }
+    shape->text = malloc(byte_count == 0 ? 1 : byte_count);
+    if (shape->text == NULL) {
+        free(shape);
+        fail(SILEX_FONT_OUT_OF_MEMORY, "could not retain the font shaping text");
+        return NULL;
+    }
+    if (byte_count > 0) memcpy(shape->text, utf8, byte_count);
+    memcpy(shape->requested_language, language, language_byte_count);
+    shape->requested_language[language_byte_count] = '\0';
+    shape->magic = SHAPE_MAGIC;
+    shape->instance = instance;
+    shape->byte_count = byte_count;
+    shape->requested_direction = direction;
+    shape->requested_script = script;
+    return shape;
+}
+
+int32_t silex_font_shape_add_feature(
+    void *raw,
+    uint32_t tag,
+    uint32_t value,
+    uint32_t start,
+    uint32_t end
+) {
+    FontShape *shape = checked_shape(raw);
+    if (shape == NULL) return 0;
+    if (shape->finished) {
+        fail(SILEX_FONT_INTERNAL, "font shaping features cannot change after shaping");
+        return 0;
+    }
+    for (unsigned int shift = 0; shift < 32; shift += 8) {
+        uint8_t byte = (uint8_t)((tag >> shift) & UINT32_C(0xff));
+        if (byte < UINT8_C(0x20) || byte > UINT8_C(0x7e)) {
+            fail(SILEX_FONT_INVALID_INPUT, "OpenType feature tags must contain four printable ASCII bytes");
+            return 0;
+        }
+    }
+    if (start > end || (size_t)end > shape->byte_count ||
+        !scalar_boundary(shape->text, shape->byte_count, start) ||
+        !scalar_boundary(shape->text, shape->byte_count, end)) {
+        fail(SILEX_FONT_INVALID_INPUT, "OpenType feature ranges must use ordered UTF-8 scalar boundaries");
+        return 0;
+    }
+    if (shape->feature_count == UINT32_MAX ||
+        (size_t)(shape->feature_count + 1) > SIZE_MAX / sizeof(*shape->features)) {
+        fail(SILEX_FONT_OUT_OF_MEMORY, "too many OpenType shaping features");
+        return 0;
+    }
+    hb_feature_t *next = realloc(shape->features, (shape->feature_count + 1) * sizeof(*shape->features));
+    if (next == NULL) {
+        fail(SILEX_FONT_OUT_OF_MEMORY, "could not retain the OpenType shaping features");
+        return 0;
+    }
+    shape->features = next;
+    shape->features[shape->feature_count].tag = tag;
+    shape->features[shape->feature_count].value = value;
+    shape->features[shape->feature_count].start = start;
+    shape->features[shape->feature_count].end = end;
+    ++shape->feature_count;
+    return 1;
+}
+
+int32_t silex_font_shape_finish(void *raw) {
+    clear_error();
+    FontShape *shape = checked_shape(raw);
+    if (shape == NULL) return 0;
+    if (shape->finished) return 1;
+    if (shape->instance == NULL || shape->instance->magic != INSTANCE_MAGIC) {
+        fail(SILEX_FONT_INTERNAL, "font shaping requires a live instance");
+        return 0;
+    }
+
+    hb_buffer_t *buffer = hb_buffer_create();
+    if (buffer == hb_buffer_get_empty()) {
+        fail(SILEX_FONT_OUT_OF_MEMORY, "could not allocate the HarfBuzz shaping buffer");
+        return 0;
+    }
+    hb_buffer_set_cluster_level(buffer, HB_BUFFER_CLUSTER_LEVEL_MONOTONE_GRAPHEMES);
+    hb_buffer_add_utf8(buffer, (const char *)shape->text, (int)shape->byte_count, 0, (int)shape->byte_count);
+    hb_direction_t requested_direction = to_hb_direction(shape->requested_direction);
+    if (requested_direction != HB_DIRECTION_INVALID) hb_buffer_set_direction(buffer, requested_direction);
+    if (shape->requested_script != 0) hb_buffer_set_script(buffer, hb_script_from_iso15924_tag(shape->requested_script));
+    hb_buffer_set_language(buffer, hb_language_from_string(shape->requested_language, -1));
+    hb_buffer_guess_segment_properties(buffer);
+    if (hb_buffer_get_direction(buffer) == HB_DIRECTION_INVALID) hb_buffer_set_direction(buffer, HB_DIRECTION_LTR);
+    if (hb_buffer_get_script(buffer) == HB_SCRIPT_INVALID) hb_buffer_set_script(buffer, HB_SCRIPT_COMMON);
+    if (hb_buffer_get_language(buffer) == HB_LANGUAGE_INVALID) hb_buffer_set_language(buffer, hb_language_from_string("und", -1));
+
+    hb_shape(shape->instance->hb_font, buffer, shape->features, shape->feature_count);
+    if (!hb_buffer_allocation_successful(buffer)) {
+        hb_buffer_destroy(buffer);
+        fail(SILEX_FONT_OUT_OF_MEMORY, "HarfBuzz could not allocate the shaped glyph buffer");
+        return 0;
+    }
+    unsigned int glyph_count = 0;
+    const hb_glyph_info_t *infos = hb_buffer_get_glyph_infos(buffer, &glyph_count);
+    const hb_glyph_position_t *positions = hb_buffer_get_glyph_positions(buffer, NULL);
+    if (glyph_count > UINT32_MAX || (glyph_count > 0 && (infos == NULL || positions == NULL))) {
+        hb_buffer_destroy(buffer);
+        fail(SILEX_FONT_INTERNAL, "HarfBuzz returned an invalid shaped glyph buffer");
+        return 0;
+    }
+    if (glyph_count > 0) {
+        shape->glyphs = calloc(glyph_count, sizeof(*shape->glyphs));
+        if (shape->glyphs == NULL) {
+            hb_buffer_destroy(buffer);
+            fail(SILEX_FONT_OUT_OF_MEMORY, "could not copy the shaped glyphs");
+            return 0;
+        }
+    }
+
+    uint32_t *cluster_starts = NULL;
+    if (glyph_count > 0) {
+        cluster_starts = malloc(glyph_count * sizeof(*cluster_starts));
+        if (cluster_starts == NULL) {
+            free(shape->glyphs);
+            shape->glyphs = NULL;
+            hb_buffer_destroy(buffer);
+            fail(SILEX_FONT_OUT_OF_MEMORY, "could not copy the shaped clusters");
+            return 0;
+        }
+        for (unsigned int index = 0; index < glyph_count; ++index) cluster_starts[index] = infos[index].cluster;
+        qsort(cluster_starts, glyph_count, sizeof(*cluster_starts), compare_u32);
+    }
+
+    unsigned int unique_count = 0;
+    for (unsigned int index = 0; index < glyph_count; ++index) {
+        if (unique_count == 0 || cluster_starts[index] != cluster_starts[unique_count - 1]) {
+            cluster_starts[unique_count++] = cluster_starts[index];
+        }
+    }
+
+    int32_t pen_x = 0;
+    int32_t pen_y = 0;
+    for (unsigned int index = 0; index < glyph_count; ++index) {
+        FontGlyphRecord *glyph = &shape->glyphs[index];
+        glyph->id = infos[index].codepoint;
+        glyph->cluster_start = infos[index].cluster;
+        glyph->cluster_end = (uint32_t)shape->byte_count;
+        for (unsigned int cluster = 0; cluster < unique_count; ++cluster) {
+            if (cluster_starts[cluster] == glyph->cluster_start && cluster + 1 < unique_count) {
+                glyph->cluster_end = cluster_starts[cluster + 1];
+                break;
+            }
+        }
+        glyph->x_advance = positions[index].x_advance;
+        glyph->y_advance = positions[index].y_advance;
+        glyph->x_offset = positions[index].x_offset;
+        glyph->y_offset = positions[index].y_offset;
+        glyph->x_origin = pen_x + glyph->x_offset;
+        glyph->y_origin = pen_y + glyph->y_offset;
+        hb_glyph_extents_t extents;
+        if (hb_font_get_glyph_extents(shape->instance->hb_font, glyph->id, &extents) &&
+            (extents.width != 0 || extents.height != 0)) {
+            glyph->has_ink = 1;
+            glyph->x_bearing = extents.x_bearing;
+            glyph->y_bearing = extents.y_bearing;
+            glyph->width = extents.width;
+            glyph->height = extents.height;
+        }
+        pen_x += glyph->x_advance;
+        pen_y += glyph->y_advance;
+    }
+    free(cluster_starts);
+
+    shape->glyph_count = glyph_count;
+    shape->x_advance = pen_x;
+    shape->y_advance = pen_y;
+    shape->direction = from_hb_direction(hb_buffer_get_direction(buffer));
+    shape->script = hb_script_to_iso15924_tag(hb_buffer_get_script(buffer));
+    const char *language = hb_language_to_string(hb_buffer_get_language(buffer));
+    (void)snprintf(shape->language, sizeof(shape->language), "%s", language == NULL ? "und" : language);
+    shape->finished = 1;
+    ++shape->instance->shape_count;
+    hb_buffer_destroy(buffer);
+    return 1;
+}
+
+void silex_font_shape_destroy(void *raw) {
+    if (raw == NULL) return;
+    FontShape *shape = raw;
+    if (shape->magic != SHAPE_MAGIC) {
+        fail(SILEX_FONT_INTERNAL, "invalid font shape handle");
+        return;
+    }
+    shape->magic = 0;
+    free(shape->glyphs);
+    free(shape->features);
+    free(shape->text);
+    free(shape);
+}
+
+uint32_t silex_font_shape_glyph_count(const void *raw) { const FontShape *s = checked_finished_shape(raw); return s == NULL ? 0 : s->glyph_count; }
+int32_t silex_font_shape_direction(const void *raw) { const FontShape *s = checked_finished_shape(raw); return s == NULL ? 0 : s->direction; }
+uint32_t silex_font_shape_script(const void *raw) { const FontShape *s = checked_finished_shape(raw); return s == NULL ? 0 : s->script; }
+const char *silex_font_shape_language(const void *raw) { const FontShape *s = checked_finished_shape(raw); return s == NULL ? "" : s->language; }
+uint32_t silex_font_shape_glyph_id(const void *raw, uint32_t index) { const FontGlyphRecord *g = checked_glyph(raw, index); return g == NULL ? 0 : g->id; }
+uint32_t silex_font_shape_glyph_cluster_start(const void *raw, uint32_t index) { const FontGlyphRecord *g = checked_glyph(raw, index); return g == NULL ? 0 : g->cluster_start; }
+uint32_t silex_font_shape_glyph_cluster_end(const void *raw, uint32_t index) { const FontGlyphRecord *g = checked_glyph(raw, index); return g == NULL ? 0 : g->cluster_end; }
+int32_t silex_font_shape_glyph_x_advance(const void *raw, uint32_t index) { const FontGlyphRecord *g = checked_glyph(raw, index); return g == NULL ? 0 : g->x_advance; }
+int32_t silex_font_shape_glyph_y_advance(const void *raw, uint32_t index) { const FontGlyphRecord *g = checked_glyph(raw, index); return g == NULL ? 0 : g->y_advance; }
+int32_t silex_font_shape_glyph_x_offset(const void *raw, uint32_t index) { const FontGlyphRecord *g = checked_glyph(raw, index); return g == NULL ? 0 : g->x_offset; }
+int32_t silex_font_shape_glyph_y_offset(const void *raw, uint32_t index) { const FontGlyphRecord *g = checked_glyph(raw, index); return g == NULL ? 0 : g->y_offset; }
+int32_t silex_font_shape_glyph_x_origin(const void *raw, uint32_t index) { const FontGlyphRecord *g = checked_glyph(raw, index); return g == NULL ? 0 : g->x_origin; }
+int32_t silex_font_shape_glyph_y_origin(const void *raw, uint32_t index) { const FontGlyphRecord *g = checked_glyph(raw, index); return g == NULL ? 0 : g->y_origin; }
+int32_t silex_font_shape_glyph_has_ink(const void *raw, uint32_t index) { const FontGlyphRecord *g = checked_glyph(raw, index); return g == NULL ? 0 : g->has_ink; }
+int32_t silex_font_shape_glyph_x_bearing(const void *raw, uint32_t index) { const FontGlyphRecord *g = checked_glyph(raw, index); return g == NULL ? 0 : g->x_bearing; }
+int32_t silex_font_shape_glyph_y_bearing(const void *raw, uint32_t index) { const FontGlyphRecord *g = checked_glyph(raw, index); return g == NULL ? 0 : g->y_bearing; }
+int32_t silex_font_shape_glyph_width(const void *raw, uint32_t index) { const FontGlyphRecord *g = checked_glyph(raw, index); return g == NULL ? 0 : g->width; }
+int32_t silex_font_shape_glyph_height(const void *raw, uint32_t index) { const FontGlyphRecord *g = checked_glyph(raw, index); return g == NULL ? 0 : g->height; }
+int32_t silex_font_shape_x_advance(const void *raw) { const FontShape *s = checked_finished_shape(raw); return s == NULL ? 0 : s->x_advance; }
+int32_t silex_font_shape_y_advance(const void *raw) { const FontShape *s = checked_finished_shape(raw); return s == NULL ? 0 : s->y_advance; }
+
+uint32_t silex_font_instance_shape_count(const void *raw) {
+    const FontInstance *instance = raw;
+    if (instance == NULL || instance->magic != INSTANCE_MAGIC) {
+        fail(SILEX_FONT_INTERNAL, "a live font instance is required");
+        return 0;
+    }
+    return instance->shape_count;
 }
 
 int32_t silex_font_last_error_code(void) { return error_code; }

@@ -95,6 +95,65 @@ explicit and include it in instance identity. `StyleIntent` describes requested
 weight, width, and slant; it does not trigger system-font lookup, automatic
 substitution, or implicit synthesis.
 
+## Shape one homogeneous Unicode run
+
+`Instance.shape` turns one homogeneous UTF-8 segment into a `GlyphRun`. The
+result owns its text, instance, direction, script, language, positioned glyphs,
+and measurements. The call is fallible because feature tags and ranges depend
+on the text being shaped.
+
+```sx
+match instance.shape(
+    "office",
+    Font.ShapeOptions(
+        direction:Font.Direction.left_to_right,
+        script:"Latn",
+        language:"fr",
+        features:[Font.Feature("liga", 1), Font.Feature("kern", 1)]
+    )
+) {
+    failure(error) => { print(error.detail) }
+    success(run) => {
+        for glyph in run.glyphs() {
+            let origin = glyph.origin()
+            let cluster = glyph.cluster()
+            print("$(glyph.id) at $(origin.x), cluster $(cluster.start):$(cluster.end)")
+        }
+    }
+}
+```
+
+Clusters are byte ranges in the original UTF-8 string and always land on
+scalar boundaries. Several glyphs may share one range, while one ligature may
+cover several scalars. Their order follows the run direction, so it is usually
+descending in an RTL run. `advance()`, `offset()`, and `origin()` stay
+distinct; the origin includes placement offset and can be passed directly to a
+glyph consumer.
+
+`RunMetrics.advance` is the total logical advance. `logical_bounds` describes
+the line, `ink_bounds` describes only drawn ink, and baseline, ascender,
+descender, and line height come from the same instance. A space advances
+without ink. An empty string produces an empty run with defined line metrics.
+An uncovered scalar keeps the notdef glyph; `Glyph.is_notdef()` and
+`GlyphRun.missing_glyph_count()` make it inspectable without a system-font
+lookup.
+
+A feature has a four-byte printable ASCII OpenType tag, a value, and an
+optional `[start, end)` range in UTF-8 offsets. `end:-1` means the end of the
+text. A range that splits a scalar is rejected. Features remain ordered and
+participate in the cache key.
+
+When omitted, direction and script are inferred from the first unambiguous
+content; empty or neutral text falls back to LTR and `Zyyy`. An omitted
+language becomes `und`. Passing these properties explicitly is recommended for
+known editorial text. Each instance retains at most 64 shaped results;
+different size, variations, synthesis, text, or options never share an entry.
+
+A run cannot contain a line break or a mixed-bidi paragraph. Multi-face
+fallback, hyphenation, justification, and width wrapping remain responsibilities
+of a future paragraph layer. Callers segment those cases into homogeneous runs
+and compose their results.
+
 ## Use bundled fonts
 
 `Face.default()` loads variable Noto Sans and `Face.monospace()` loads Noto Sans
@@ -107,11 +166,12 @@ compose their faces from assets and explicit paths.
 
 ## Native boundary
 
-Private ABI v2 is distributed for macOS ARM64, Linux x64, Windows x64, and
+Private ABI v3 is distributed for macOS ARM64, Linux x64, Windows x64, and
 Windows ARM64. A face owns its bytes and the corresponding FreeType/HarfBuzz
 views. Every instance owns separate HarfBuzz variation state, so repeated face
-reads do not mutate shared size or coordinates. No native handle or type crosses
-the public API.
+reads do not mutate shared size or coordinates. The shaping protocol copies
+glyphs, clusters, positions, and extents before destroying its HarfBuzz buffer.
+No native handle or type crosses the public API.
 
 Windows ARM64 remains a recognized experimental target: its archive and link
 provide structural evidence, not native execution.

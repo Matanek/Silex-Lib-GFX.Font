@@ -3,7 +3,8 @@
 `GFX.Font` possède les fontes portables de GFX. Il charge des faces TTF,
 OTF/CFF et TTC depuis des octets ou un fichier, expose leurs noms, leur
 couverture Unicode, leurs métriques et leurs variations, puis crée des
-instances immuables à une taille logique.
+instances immuables à une taille logique. Une instance façonne ensuite un run
+Unicode homogène en glyphes positionnés, clusters UTF-8 et mesures logiques.
 
 ```text
 silex install GFX.Font

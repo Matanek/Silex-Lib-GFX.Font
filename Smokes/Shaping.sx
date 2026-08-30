@@ -1,0 +1,26 @@
+use GFX.Font
+
+func main() {
+    match Font.Face.default() {
+        failure(error) => { panic(error.detail) }
+        success(face) => {
+            match Font.Instance.create(face, size:18.0) {
+                failure(error) => { panic(error.detail) }
+                success(instance) => {
+                    match instance.shape("office", Font.ShapeOptions(
+                        direction:Font.Direction.left_to_right,
+                        script:"Latn",
+                        language:"fr",
+                        features:[Font.Feature("liga", 1)]
+                    )) {
+                        failure(error) => { panic(error.detail) }
+                        success(run) => {
+                            assert(run.glyph_count() == 4)
+                            assert(run.metrics().advance.x > 0.0)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

@@ -8,7 +8,7 @@
 extern "C" {
 #endif
 
-#define SILEX_FONT_ABI_VERSION 2u
+#define SILEX_FONT_ABI_VERSION 3u
 
 enum SilexFontStatus {
     SILEX_FONT_OK = 0,
@@ -18,7 +18,8 @@ enum SilexFontStatus {
     SILEX_FONT_OUT_OF_MEMORY = 4,
     SILEX_FONT_UNSUPPORTED = 5,
     SILEX_FONT_ABI_MISMATCH = 6,
-    SILEX_FONT_INTERNAL = 7
+    SILEX_FONT_INTERNAL = 7,
+    SILEX_FONT_INVALID_INPUT = 8
 };
 
 enum SilexFontCapability {
@@ -32,6 +33,14 @@ enum SilexFontOutlineKind {
     SILEX_FONT_OUTLINE_NONE = 0,
     SILEX_FONT_OUTLINE_QUADRATIC = 1,
     SILEX_FONT_OUTLINE_CUBIC = 2
+};
+
+enum SilexFontDirection {
+    SILEX_FONT_DIRECTION_AUTO = 0,
+    SILEX_FONT_DIRECTION_LEFT_TO_RIGHT = 1,
+    SILEX_FONT_DIRECTION_RIGHT_TO_LEFT = 2,
+    SILEX_FONT_DIRECTION_TOP_TO_BOTTOM = 3,
+    SILEX_FONT_DIRECTION_BOTTOM_TO_TOP = 4
 };
 
 uint32_t silex_font_abi_version(void);
@@ -90,6 +99,46 @@ int32_t silex_font_instance_scalar_bounds(
     int32_t *width,
     int32_t *height
 );
+
+void *silex_font_shape_create(
+    const void *instance,
+    const uint8_t *utf8,
+    size_t byte_count,
+    int32_t direction,
+    uint32_t script,
+    const uint8_t *language,
+    size_t language_byte_count
+);
+int32_t silex_font_shape_add_feature(
+    void *shape,
+    uint32_t tag,
+    uint32_t value,
+    uint32_t start,
+    uint32_t end
+);
+int32_t silex_font_shape_finish(void *shape);
+void silex_font_shape_destroy(void *shape);
+uint32_t silex_font_shape_glyph_count(const void *shape);
+int32_t silex_font_shape_direction(const void *shape);
+uint32_t silex_font_shape_script(const void *shape);
+const char *silex_font_shape_language(const void *shape);
+uint32_t silex_font_shape_glyph_id(const void *shape, uint32_t index);
+uint32_t silex_font_shape_glyph_cluster_start(const void *shape, uint32_t index);
+uint32_t silex_font_shape_glyph_cluster_end(const void *shape, uint32_t index);
+int32_t silex_font_shape_glyph_x_advance(const void *shape, uint32_t index);
+int32_t silex_font_shape_glyph_y_advance(const void *shape, uint32_t index);
+int32_t silex_font_shape_glyph_x_offset(const void *shape, uint32_t index);
+int32_t silex_font_shape_glyph_y_offset(const void *shape, uint32_t index);
+int32_t silex_font_shape_glyph_x_origin(const void *shape, uint32_t index);
+int32_t silex_font_shape_glyph_y_origin(const void *shape, uint32_t index);
+int32_t silex_font_shape_glyph_has_ink(const void *shape, uint32_t index);
+int32_t silex_font_shape_glyph_x_bearing(const void *shape, uint32_t index);
+int32_t silex_font_shape_glyph_y_bearing(const void *shape, uint32_t index);
+int32_t silex_font_shape_glyph_width(const void *shape, uint32_t index);
+int32_t silex_font_shape_glyph_height(const void *shape, uint32_t index);
+int32_t silex_font_shape_x_advance(const void *shape);
+int32_t silex_font_shape_y_advance(const void *shape);
+uint32_t silex_font_instance_shape_count(const void *instance);
 
 int32_t silex_font_last_error_code(void);
 const char *silex_font_last_error_detail(void);

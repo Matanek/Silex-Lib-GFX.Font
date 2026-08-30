@@ -147,6 +147,7 @@ build_target() {
         -o "$font_build_root/abi-layout-$font_name.$font_shim_object_extension"
 
     if [ "$font_system" != Windows ]; then
+        rm -f "$font_destination/${font_prefix}SilexFont.$font_extension"
         "$font_native_dir/Toolchains/zig-ar" rcsD \
             "$font_destination/${font_prefix}SilexFont.$font_extension" \
             "$font_build_root/SilexFont-$font_name.$font_shim_object_extension" \

@@ -97,6 +97,67 @@ explicite et l’intègrent à l’identité de l’instance. `StyleIntent` déc
 poids, une largeur et une inclinaison demandés ; il ne déclenche ni recherche de
 fonte système, ni substitution automatique, ni synthèse implicite.
 
+## Façonner un run Unicode homogène
+
+`Instance.shape` transforme un seul segment UTF-8 homogène en `GlyphRun`. Le
+résultat possède le texte, l’instance, la direction, le script, la langue, les
+glyphes positionnés et ses mesures. L’appel est faillible parce que les tags et
+plages de features dépendent du texte réellement façonné.
+
+```sx
+match instance.shape(
+    "office",
+    Font.ShapeOptions(
+        direction:Font.Direction.left_to_right,
+        script:"Latn",
+        language:"fr",
+        features:[Font.Feature("liga", 1), Font.Feature("kern", 1)]
+    )
+) {
+    failure(error) => { print(error.detail) }
+    success(run) => {
+        for glyph in run.glyphs() {
+            let origin = glyph.origin()
+            let cluster = glyph.cluster()
+            print("$(glyph.id) à $(origin.x), cluster $(cluster.start):$(cluster.end)")
+        }
+    }
+}
+```
+
+Les clusters sont des plages d’octets de la chaîne UTF-8 d’origine, toujours
+alignées sur des frontières de scalar. Plusieurs glyphes peuvent partager la
+même plage, tandis qu’une ligature peut couvrir plusieurs scalars. Leur ordre
+suit la direction du run : il est donc normalement descendant pour un run RTL.
+`advance()`, `offset()` et `origin()` restent distincts ; l’origine inclut
+l’offset de placement et peut être passée directement au consommateur du
+glyphe.
+
+`RunMetrics.advance` donne l’avance logique totale. `logical_bounds` décrit la
+ligne, `ink_bounds` seulement l’encre effectivement dessinée, et les métriques
+de baseline, ascender, descender et hauteur de ligne viennent de la même
+instance. Une espace possède une avance sans encre. Une chaîne vide produit un
+run vide avec des métriques de ligne définies. Un scalar absent conserve le
+glyphe notdef ; `Glyph.is_notdef()` et `GlyphRun.missing_glyph_count()` le
+rendent inspectable sans chercher une fonte système.
+
+Une feature porte un tag OpenType de quatre octets ASCII imprimables, une
+valeur et une plage optionnelle `[start, end)` en offsets UTF-8. `end:-1`
+signifie la fin du texte. Une plage qui coupe un scalar est refusée. Les
+features restent ordonnées et font partie de la clé du cache.
+
+Quand elles sont omises, la direction et le script sont déduits du premier
+contenu non ambigu ; un texte vide ou neutre retombe sur LTR et `Zyyy`. La
+langue omise est `und`. Passer ces propriétés explicitement est recommandé
+pour un texte éditorial connu. Chaque instance conserve au plus 64 résultats
+de shaping ; taille, variations, synthèses, texte et options distincts ne
+partagent jamais une entrée.
+
+Un run ne contient ni saut de ligne ni paragraphe bidi mixte. Le fallback
+multi-face, la césure, la justification et le wrapping restent la
+responsabilité d’une future couche de paragraphe. L’appelant segmente ces cas
+en runs homogènes et peut composer leurs résultats.
+
 ## Utiliser les fontes distribuées
 
 `Face.default()` charge Noto Sans variable et `Face.monospace()` charge Noto
@@ -110,11 +171,13 @@ explicites.
 
 ## Frontière native
 
-L’ABI privée v2 est distribuée pour macOS ARM64, Linux x64, Windows x64 et
+L’ABI privée v3 est distribuée pour macOS ARM64, Linux x64, Windows x64 et
 Windows ARM64. Une face possède ses octets et les vues FreeType/HarfBuzz
 correspondantes. Chaque instance possède son propre état HarfBuzz de variation ;
 les lectures répétées d’une face ne modifient donc pas une taille ou des
-coordonnées partagées. Aucun handle ni type natif ne traverse l’API publique.
+coordonnées partagées. Le protocole de shaping copie glyphes, clusters,
+positions et extents avant de détruire son buffer HarfBuzz. Aucun handle ni
+type natif ne traverse l’API publique.
 
 Windows ARM64 reste une cible reconnue et expérimentale : l’archive et la
 liaison fournissent une preuve structurelle, pas une exécution native.
