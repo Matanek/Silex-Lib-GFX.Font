@@ -1,6 +1,6 @@
 # Rebuild the GFX.Font boundary
 
-GFX.Font owns one private C ABI over two exact upstream releases:
+GFX.Font owns private C ABI v2 over two exact upstream releases:
 
 - FreeType 2.14.3, tag commit
   `0a0221a1347e2f1e07c395263540026e9a0aa7c7`, source SHA-256
@@ -28,9 +28,12 @@ for `macos-arm64`, `linux-x64`, `windows-x64`, and `windows-arm64`. FreeType is
 built without zlib, bzip2, PNG, Brotli, or HarfBuzz; HarfBuzz is built without
 FreeType, CoreText, DirectWrite, Uniscribe, GDI, ICU, GLib, Graphite2, Cairo,
 utilities, subsetting, raster, vector, GPU add-ons, memory-mapped files, or
-HarfBuzz file I/O. The package shim opens
-the same retained bytes and face index independently in both libraries, which
-avoids a FreeType/HarfBuzz link cycle.
+HarfBuzz file I/O. The package shim opens the same retained bytes and face index
+independently in both libraries, which avoids a FreeType/HarfBuzz link cycle.
+It exposes face names, em metrics, Unicode coverage, variation axes, and named
+instances as C scalars and copied UTF-8 text. Each public font instance owns a
+separate HarfBuzz font and its effective coordinates; public Silex values never
+expose a FreeType or HarfBuzz handle.
 
 The source archives and expanded upstream trees are build inputs and are not
 committed. `Boundary/SHA256SUMS.txt` and every target's

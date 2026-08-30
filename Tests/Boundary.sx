@@ -1,23 +1,35 @@
 use GFX.Font
 use GFX.Font.Native
 
-test "verify native ABI layout and release all global state" {
-    assert(Native.abi_version_value() == 1)
+func exercise_native_lifetimes() {
+    let bytes = embed_bytes("Fixtures/Minimal.ttf")
+    match Font.Face.decode(bytes) {
+        failure(error) => { panic(error.detail) }
+        success(face) => {
+            assert(Native.live_library_count() == 1)
+            assert(Native.live_face_count() == 1)
+            match Font.Instance.create(face, size:16.0) {
+                failure(error) => { panic(error.detail) }
+                success(instance) => {
+                    assert(Native.live_instance_count() == 1)
+                    assert(instance.metrics().line_height > 0.0)
+                }
+            }
+            assert(Native.live_instance_count() == 0)
+        }
+    }
+}
+
+test "verify ABI v2 and release every native lifetime" {
+    assert(Native.abi_version_value() == 2)
     assert(Native.abi_pointer_size_value() == 8)
     assert(Native.abi_size_size_value() == 8)
     assert(Native.abi_pointer_alignment_value() == 8)
     assert(Native.live_library_count() == 0)
     assert(Native.live_face_count() == 0)
-
-    let bytes = embed_bytes("Fixtures/Minimal.ttf")
-    match Font.Face.try_open(bytes) {
-        failure(error) => { panic(error.detail) }
-        success(face) => {
-            assert(Native.live_library_count() == 1)
-            assert(Native.live_face_count() == 1)
-            assert(face.close())
-            assert(Native.live_library_count() == 0)
-            assert(Native.live_face_count() == 0)
-        }
-    }
+    assert(Native.live_instance_count() == 0)
+    exercise_native_lifetimes()
+    assert(Native.live_library_count() == 0)
+    assert(Native.live_face_count() == 0)
+    assert(Native.live_instance_count() == 0)
 }

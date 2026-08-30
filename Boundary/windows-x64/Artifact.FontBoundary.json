@@ -1,9 +1,9 @@
 {
-  "abi": "silex-font-1",
+  "abi": "silex-font-2",
   "target": "windows-x64",
   "linkage": "static",
   "artifacts": {
-    "SilexFont": "03bc76391cd5fbd116e4b414b180f45a592d30eab695cfae564f21f19f40a77e",
+    "SilexFont": "9194fefc3f5c76a891802d43d64c8d634567de474280644f989cc9bb04292283",
     "FreeType": "cd7098e9850246ea55b7ea180511ef34965c1d841960d07620806b994af9a35d",
     "HarfBuzz": "1f36072e88639978958cd3193783d8ab97f6c19c2f45721799964ea2203d2d35"
   },

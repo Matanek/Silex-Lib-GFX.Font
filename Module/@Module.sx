@@ -1,19 +1,30 @@
 use GFX.Font.Native
+use STD.Crypto
+use STD.File
+use STD.Math
+use STD.Path.Path as Path
+use STD.Text.UTF8
 
 public enum ErrorKind {
+    file_read
     empty_data
     invalid_data
     face_index_out_of_range
+    invalid_size
+    invalid_tag
+    unknown_axis
+    duplicate_axis
+    variation_out_of_range
     out_of_memory
     unsupported
+    unavailable
     abi_mismatch
     native_failure
 }
 
-public struct Error {
-    let kind:ErrorKind
-    let detail:str
-}
+public struct Error { let kind:ErrorKind; let detail:str }
+
+public enum OutlineKind { none; quadratic; cubic }
 
 public struct Capabilities {
     let outlines:bool
@@ -22,41 +33,137 @@ public struct Capabilities {
     let color:bool
 }
 
+public struct Metrics {
+    let units_per_em:int
+    let ascender:float64
+    let descender:float64
+    let line_gap:float64
+    let line_height:float64
+    let underline_position:float64
+    let underline_thickness:float64
+    let strikeout_position:float64
+    let strikeout_thickness:float64
+}
+
+public struct Axis {
+    let tag:str
+    let name:str?
+    let minimum:float64
+    let default_value:float64
+    let maximum:float64
+}
+
+public struct Variation {
+    let tag:str
+    let value:float64
+
+    init(tag:str, value:float64) {
+        self.tag = tag
+        self.value = value
+    }
+}
+
+public struct NamedInstance {
+    let name:str?
+    let postscript_name:str?
+    let variations:Variation[]
+}
+
+public enum Slant { upright; italic; oblique }
+
+public struct StyleIntent {
+    let weight:int
+    let width:float64
+    let slant:Slant
+
+    init(weight:int = 400, width:float64 = 100.0, slant:Slant = Slant.upright()) {
+        self.weight = weight
+        self.width = width
+        self.slant = slant
+    }
+}
+
+public struct Synthesis {
+    let embolden:bool
+    let oblique:bool
+
+    init(embolden:bool = false, oblique:bool = false) {
+        self.embolden = embolden
+        self.oblique = oblique
+    }
+}
+
+public struct Bounds {
+    let x:float64
+    let y:float64
+    let width:float64
+    let height:float64
+}
+
 public class Face {
     private var library_handle:uint
     private var face_handle:uint
-    private let retained_bytes:str
+    private let stable_identity:str
 
-    private init(data:Native.FaceData) {
+    private init(data:Native.FaceData, identity:str) {
         self.library_handle = data.library
         self.face_handle = data.face
-        self.retained_bytes = data.retained_bytes
+        self.stable_identity = identity
     }
 
-    drop { self.close() }
-
-    static func try_open(bytes:uint8[], index:int = 0) Result<Face, Error> {
-        match Native.open(bytes, index) {
-            failure(error) => {
-                return Result<Face, Error>.failure(Error(
-                    kind:public_error_kind(error.kind),
-                    detail:error.detail
-                ))
-            }
-            success(data) => { return Result<Face, Error>.success(Face(data)) }
+    drop {
+        if self.face_handle != 0 as uint {
+            Native.close_face(self.library_handle, self.face_handle)
+            self.face_handle = 0 as uint
+            self.library_handle = 0 as uint
         }
     }
 
-    func is_open() bool { return self.face_handle != 0 as uint }
-    func index() int { self.require_open(); return Native.index(self.face_handle) }
-    func face_count() int { self.require_open(); return Native.count(self.face_handle) }
-    func glyph_count() int { self.require_open(); return Native.glyph_count(self.face_handle) }
-    func units_per_em() int { self.require_open(); return Native.units_per_em(self.face_handle) }
-    func family_name() str { self.require_open(); return Native.family_name(self.face_handle) }
-    func style_name() str { self.require_open(); return Native.style_name(self.face_handle) }
+    static func decode(bytes:uint8[], face_index:int = 0) Result<Face, Error> {
+        match Native.open(bytes, face_index) {
+            failure(error) => { return Result<Face, Error>.failure(public_error(error)) }
+            success(data) => {
+                let digest = Crypto.sha256(@bytes[0:bytes.count()])
+                return Result<Face, Error>.success(Face(data, digest + "#$(face_index)"))
+            }
+        }
+    }
+
+    static func try_open(bytes:uint8[], index:int = 0) Result<Face, Error> {
+        return Face.decode(bytes, face_index:index)
+    }
+
+    static func open(path:Path, face_index:int = 0, maximum_bytes:int = 67108864) Result<Face, Error> {
+        match File.read_all(path, maximum_bytes) {
+            failure(error) => {
+                return Result<Face, Error>.failure(Error(
+                    kind:ErrorKind.file_read,
+                    detail:error.detail
+                ))
+            }
+            success(bytes) => { return Face.decode(bytes, face_index:face_index) }
+        }
+    }
+
+    static func default() Result<Face, Error> {
+        return Face.decode(embed_bytes("../Assets/Fonts/NotoSans.ttf"))
+    }
+
+    static func monospace() Result<Face, Error> {
+        return Face.decode(embed_bytes("../Assets/Fonts/NotoSansMono-Regular.ttf"))
+    }
+
+    func identity() str { return self.stable_identity }
+    func index() int { return Native.index(self.face_handle) }
+    func face_count() int { return Native.count(self.face_handle) }
+    func glyph_count() int { return Native.glyph_count(self.face_handle) }
+    func units_per_em() int { return Native.units_per_em(self.face_handle) }
+    func family_name() str? { return optional_text(Native.family_name(self.face_handle)) }
+    func subfamily_name() str? { return optional_text(Native.subfamily_name(self.face_handle)) }
+    func postscript_name() str? { return optional_text(Native.postscript_name(self.face_handle)) }
+    func supports(scalar:uint32) bool { return Native.supports_scalar(self.face_handle, scalar) }
 
     func capabilities() Capabilities {
-        self.require_open()
         let value = Native.capabilities(self.face_handle)
         return Capabilities(
             outlines:(value & (1 as uint)) != 0 as uint,
@@ -66,27 +173,260 @@ public class Face {
         )
     }
 
-    func close() bool {
-        if self.face_handle == 0 as uint { return false }
-        Native.close(self.library_handle, self.face_handle)
-        self.face_handle = 0 as uint
-        self.library_handle = 0 as uint
-        return true
+    func outline_kind() OutlineKind {
+        let kind = Native.outline_kind(self.face_handle)
+        if kind == 1 { return OutlineKind.quadratic() }
+        if kind == 2 { return OutlineKind.cubic() }
+        return OutlineKind.none()
     }
 
-    private func require_open() {
-        if !self.is_open() { panic("GFX.Font face is closed") }
+    func metrics() Metrics {
+        let upem = self.units_per_em()
+        let scale = upem as float64
+        return Metrics(
+            units_per_em:upem,
+            ascender:Native.ascender(self.face_handle) as float64 / scale,
+            descender:Native.descender(self.face_handle) as float64 / scale,
+            line_gap:Native.line_gap(self.face_handle) as float64 / scale,
+            line_height:Native.line_height(self.face_handle) as float64 / scale,
+            underline_position:Native.underline_position(self.face_handle) as float64 / scale,
+            underline_thickness:Native.underline_thickness(self.face_handle) as float64 / scale,
+            strikeout_position:Native.strikeout_position(self.face_handle) as float64 / scale,
+            strikeout_thickness:Native.strikeout_thickness(self.face_handle) as float64 / scale
+        )
+    }
+
+    func axes() Axis[] {
+        var result:Axis[] = []
+        var index = 0
+        while index < Native.axis_count(self.face_handle) {
+            result.append(Axis(
+                tag:Native.axis_tag(self.face_handle, index),
+                name:optional_text(Native.axis_name(self.face_handle, index)),
+                minimum:Native.axis_minimum(self.face_handle, index),
+                default_value:Native.axis_default(self.face_handle, index),
+                maximum:Native.axis_maximum(self.face_handle, index)
+            ))
+            index++
+        }
+        return result
+    }
+
+    func named_instances() NamedInstance[] {
+        let axes = self.axes()
+        var result:NamedInstance[] = []
+        var instance_index = 0
+        while instance_index < Native.named_instance_count(self.face_handle) {
+            var variations:Variation[] = []
+            var axis_index = 0
+            while axis_index < axes.count() {
+                variations.append(Variation(
+                    axes[axis_index].tag,
+                    Native.named_instance_coordinate(self.face_handle, instance_index, axis_index)
+                ))
+                axis_index++
+            }
+            result.append(NamedInstance(
+                name:optional_text(Native.named_instance_name(self.face_handle, instance_index)),
+                postscript_name:optional_text(Native.named_instance_postscript_name(self.face_handle, instance_index)),
+                variations:variations
+            ))
+            instance_index++
+        }
+        return result
+    }
+
+    package func native_handle() uint { return self.face_handle }
+}
+
+public class Instance {
+    private var face_value:Face
+    private var instance_handle:uint
+    private let logical_size:float64
+    private let effective_variations:Variation[]
+    private let requested_synthesis:Synthesis
+    private let stable_identity:str
+
+    private init(
+        face:Face,
+        handle:uint,
+        size:float64,
+        variations:Variation[],
+        synthesis:Synthesis,
+        identity:str
+    ) {
+        self.face_value = face
+        self.instance_handle = handle
+        self.logical_size = size
+        self.effective_variations = variations
+        self.requested_synthesis = synthesis
+        self.stable_identity = identity
+    }
+
+    drop {
+        if self.instance_handle != 0 as uint {
+            Native.close_instance(self.instance_handle)
+            self.instance_handle = 0 as uint
+        }
+    }
+
+    static func create(
+        face:Face,
+        size:float64,
+        variations:Variation[] = [],
+        synthesis:Synthesis = Synthesis()
+    ) Result<Instance, Error> {
+        if size <= 0.0 || !Math.is_finite(size) {
+            return Result<Instance, Error>.failure(Error(
+                kind:ErrorKind.invalid_size,
+                detail:"font instance size must be positive and finite"
+            ))
+        }
+        match validated_variations(face, variations) {
+            failure(error) => { return Result<Instance, Error>.failure(error) }
+            success(effective) => {
+                match Native.create_instance(face.native_handle()) {
+                    failure(error) => { return Result<Instance, Error>.failure(public_error(error)) }
+                    success(handle) => {
+                        for variation in effective {
+                            match Native.set_variation(handle, Native.tag(variation.tag), variation.value) {
+                                failure(error) => {
+                                    Native.close_instance(handle)
+                                    return Result<Instance, Error>.failure(public_error(error))
+                                }
+                                success => {}
+                            }
+                        }
+                        let identity = instance_identity(face, size, effective, synthesis)
+                        return Result<Instance, Error>.success(Instance(
+                            face, handle, size, effective, synthesis, identity
+                        ))
+                    }
+                }
+            }
+        }
+    }
+
+    func face() Face { return self.face_value }
+    func size() float64 { return self.logical_size }
+    func variations() Variation[] { return self.effective_variations }
+    func synthesis() Synthesis { return self.requested_synthesis }
+    func identity() str { return self.stable_identity }
+
+    func metrics() Metrics {
+        let value = self.face_value.metrics()
+        let scale = self.logical_size
+        return Metrics(
+            units_per_em:value.units_per_em,
+            ascender:value.ascender * scale,
+            descender:value.descender * scale,
+            line_gap:value.line_gap * scale,
+            line_height:value.line_height * scale,
+            underline_position:value.underline_position * scale,
+            underline_thickness:value.underline_thickness * scale,
+            strikeout_position:value.strikeout_position * scale,
+            strikeout_thickness:value.strikeout_thickness * scale
+        )
+    }
+
+    func scalar_bounds(scalar:uint32) Bounds? {
+        if value = Native.scalar_bounds(self.instance_handle, scalar, self.face_value.units_per_em()) {
+            return Bounds(
+                x:value.x * self.logical_size,
+                y:value.y * self.logical_size,
+                width:value.width * self.logical_size,
+                height:value.height * self.logical_size
+            )
+        }
+        return null
     }
 }
 
-func public_error_kind(kind:Native.ErrorKind) ErrorKind {
-    match kind {
-        empty_data => { return ErrorKind.empty_data }
-        invalid_data => { return ErrorKind.invalid_data }
-        face_index_out_of_range => { return ErrorKind.face_index_out_of_range }
-        out_of_memory => { return ErrorKind.out_of_memory }
-        unsupported => { return ErrorKind.unsupported }
-        abi_mismatch => { return ErrorKind.abi_mismatch }
-        native_failure => { return ErrorKind.native_failure }
+func validated_variations(face:Face, requested:Variation[]) Result<Variation[], Error> {
+    var index = 0
+    while index < requested.count() {
+        let bytes = UTF8.bytes(requested[index].tag)
+        if bytes.count() != 4 {
+            return Result<Variation[], Error>.failure(Error(
+                kind:ErrorKind.invalid_tag,
+                detail:"OpenType variation tags must contain exactly four UTF-8 bytes"
+            ))
+        }
+        if !Math.is_finite(requested[index].value) {
+            return Result<Variation[], Error>.failure(Error(
+                kind:ErrorKind.variation_out_of_range,
+                detail:"variation coordinate values must be finite"
+            ))
+        }
+        var previous = 0
+        while previous < index {
+            if requested[previous].tag == requested[index].tag {
+                return Result<Variation[], Error>.failure(Error(
+                    kind:ErrorKind.duplicate_axis,
+                    detail:"variation axis $(requested[index].tag) was provided more than once"
+                ))
+            }
+            previous++
+        }
+        index++
     }
+
+    let axes = face.axes()
+    for variation in requested {
+        var matched = false
+        for axis in axes {
+            if axis.tag == variation.tag {
+                matched = true
+                if variation.value < axis.minimum || variation.value > axis.maximum {
+                    return Result<Variation[], Error>.failure(Error(
+                        kind:ErrorKind.variation_out_of_range,
+                        detail:"variation axis $(axis.tag) accepts values from $(axis.minimum) to $(axis.maximum)"
+                    ))
+                }
+            }
+        }
+        if !matched {
+            return Result<Variation[], Error>.failure(Error(
+                kind:ErrorKind.unknown_axis,
+                detail:"font face does not expose variation axis $(variation.tag)"
+            ))
+        }
+    }
+
+    var effective:Variation[] = []
+    for axis in axes {
+        var value = axis.default_value
+        for variation in requested {
+            if variation.tag == axis.tag { value = variation.value }
+        }
+        effective.append(Variation(axis.tag, value))
+    }
+    return Result<Variation[], Error>.success(effective)
+}
+
+func instance_identity(face:Face, size:float64, variations:Variation[], synthesis:Synthesis) str {
+    var result = face.identity() + "|size=$(size)"
+    for variation in variations { result = result + "|$(variation.tag)=$(variation.value)" }
+    if synthesis.embolden { result = result + "|embolden" }
+    if synthesis.oblique { result = result + "|oblique" }
+    return result
+}
+
+func optional_text(value:str) str? {
+    if value == "" { return null }
+    return value
+}
+
+func public_error(error:Native.Error) Error {
+    var kind = ErrorKind.native_failure
+    match error.kind {
+        empty_data => { kind = ErrorKind.empty_data }
+        invalid_data => { kind = ErrorKind.invalid_data }
+        face_index_out_of_range => { kind = ErrorKind.face_index_out_of_range }
+        out_of_memory => { kind = ErrorKind.out_of_memory }
+        unsupported => { kind = ErrorKind.unsupported }
+        abi_mismatch => { kind = ErrorKind.abi_mismatch }
+        native_failure => { kind = ErrorKind.native_failure }
+    }
+    return Error(kind:kind, detail:error.detail)
 }

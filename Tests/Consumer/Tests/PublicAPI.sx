@@ -1,53 +1,228 @@
 use GFX.Font
+use STD.Crypto
+use STD.File
+use STD.FileSystem
+use STD.Math
+use STD.Threading
 
-test "open retained bytes and expose portable face metadata" {
-    let bytes = embed_bytes("../../Fixtures/Minimal.ttf")
-    match Font.Face.try_open(bytes) {
+func require_face(result:Result<Font.Face, Font.Error>) Font.Face {
+    match result {
         failure(error) => { panic(error.detail) }
-        success(face) => {
-            assert(face.is_open())
-            assert(face.index() == 0)
-            assert(face.face_count() == 1)
-            assert(face.glyph_count() > 0)
-            assert(face.units_per_em() > 0)
-            assert(face.family_name() == "Noto Sans")
-            assert(face.capabilities().outlines)
-            assert(face.capabilities().shaping)
-            assert(face.close())
-            assert(!face.close())
+        success(face) => { return face }
+    }
+}
+
+func require_instance(result:Result<Font.Instance, Font.Error>) Font.Instance {
+    match result {
+        failure(error) => { panic(error.detail) }
+        success(instance) => { return instance }
+    }
+}
+
+func write_font(path:str, bytes:uint8[]) {
+    match File.write_all(path, @bytes[0:bytes.count()]) {
+        failure(error) => { panic(error.detail) }
+        success => {}
+    }
+}
+
+func remove_font(path:str) {
+    match FileSystem.remove_file(path) {
+        failure(error) => { panic(error.detail) }
+        success => {}
+    }
+}
+
+func require_family(face:Font.Face) str {
+    if value = face.family_name() { return value }
+    panic("font face has no family name")
+}
+
+func find_axis(face:Font.Face, tag:str) Font.Axis? {
+    for axis in face.axes() {
+        if axis.tag == tag { return axis }
+    }
+    return null
+}
+
+struct FaceReadJob:Threading.Job {
+    var face:Font.Face
+    var checksum:float64
+
+    func execute() {
+        var value:float64 = 0.0
+        for iteration in 0...200 {
+            let metrics = self.face.metrics()
+            value = value + metrics.ascender + metrics.line_height
+            if !self.face.supports(65 as uint32) { panic("concurrent face read lost Unicode coverage") }
+            if self.face.axes().count() == 0 { panic("concurrent face read lost variation axes") }
+        }
+        self.checksum = value
+    }
+}
+
+test "path and bytes share a stable face identity after file removal" {
+    let bytes = embed_bytes("../../Fixtures/Minimal.ttf")
+    let path = "Tests/TemporaryFace.ttf"
+    write_font(path, bytes)
+    var from_path = require_face(Font.Face.open(path))
+    var from_bytes = require_face(Font.Face.decode(bytes))
+    assert(from_path.identity() == from_bytes.identity())
+    remove_font(path)
+    assert(from_path.metrics().units_per_em == 1000)
+    assert(from_path.metrics().line_height > 1.0)
+}
+
+test "TTC selects two valid faces and refuses a third" {
+    let bytes = embed_bytes("../../Fixtures/TwoFaces.ttc")
+    var first = require_face(Font.Face.decode(bytes, face_index:0))
+    var second = require_face(Font.Face.decode(bytes, face_index:1))
+    assert(first.face_count() == 2)
+    assert(second.face_count() == 2)
+    assert(require_family(first) == "Noto Sans")
+    assert(require_family(second) == "Noto Sans Mono")
+    assert(first.identity() != second.identity())
+    match Font.Face.decode(bytes, face_index:2) {
+        success(face) => { panic("a third TTC face was accepted") }
+        failure(error) => {
+            match error.kind {
+                face_index_out_of_range => {}
+                else => { panic("an absent TTC face returned the wrong error") }
+            }
         }
     }
 }
 
-test "distinguish empty invalid and absent-face inputs" {
-    match Font.Face.try_open([]) {
-        success(face) => { face.close(); panic("empty font data was accepted") }
-        failure(error) => {
-            match error.kind {
-                empty_data => {}
-                else => { panic("empty font data returned the wrong error") }
-            }
-        }
-    }
+test "TrueType and CFF faces expose names coverage and em metrics" {
+    var ttf_face = require_face(Font.Face.decode(embed_bytes("../../Fixtures/Minimal.ttf")))
+    var cff_face = require_face(Font.Face.decode(embed_bytes("../../Fixtures/SourceCodePro-Regular.otf")))
+    match ttf_face.outline_kind() { quadratic => {}; else => { panic("TTF outline kind is not quadratic") } }
+    match cff_face.outline_kind() { cubic => {}; else => { panic("OTF outline kind is not cubic") } }
+    assert(ttf_face.capabilities().outlines)
+    assert(cff_face.capabilities().outlines)
+    assert(require_family(cff_face) == "Source Code Pro")
+    assert(cff_face.supports(65 as uint32))
+    assert(!cff_face.supports(0x10ffff as uint32))
+    assert(cff_face.units_per_em() == 1000)
+    assert(cff_face.metrics().ascender > 0.0)
+    assert(cff_face.metrics().descender < 0.0)
+    if name = cff_face.subfamily_name() { assert(name == "Regular") } else { panic("missing CFF subfamily") }
+    if name = cff_face.postscript_name() { assert(name == "SourceCodePro-Regular") } else { panic("missing CFF PostScript name") }
+}
 
-    match Font.Face.try_open([0 as uint8, 1 as uint8, 2 as uint8, 3 as uint8]) {
-        success(face) => { face.close(); panic("invalid font data was accepted") }
-        failure(error) => {
-            match error.kind {
-                invalid_data => {}
-                else => { panic("invalid font data returned the wrong error") }
-            }
-        }
-    }
+test "variable axes named instances identities and bounds are effective" {
+    var face = require_face(Font.Face.default())
+    assert(face.capabilities().variations)
+    if axis = find_axis(face, "wght") {
+        assert(axis.minimum <= 100.0)
+        assert(axis.default_value == 400.0)
+        assert(axis.maximum >= 900.0)
+    } else { panic("Noto Sans variable asset has no weight axis") }
+    assert(face.named_instances().count() > 1)
+    if name = face.named_instances()[0].name { assert(name != "") } else { panic("named instance has no inspectable name") }
 
-    let bytes = embed_bytes("../../Fixtures/Minimal.ttf")
-    match Font.Face.try_open(bytes, index:1) {
-        success(face) => { face.close(); panic("an absent font face was accepted") }
-        failure(error) => {
-            match error.kind {
-                face_index_out_of_range => {}
-                else => { panic("an absent face returned the wrong error") }
-            }
-        }
+    var light = require_instance(Font.Instance.create(face, size:18.0, variations:[Font.Variation("wght", 100.0)]))
+    var black = require_instance(Font.Instance.create(face, size:18.0, variations:[Font.Variation("wght", 900.0)]))
+    assert(light.identity() != black.identity())
+    if light_bounds = light.scalar_bounds(65 as uint32) {
+        if black_bounds = black.scalar_bounds(65 as uint32) {
+            assert(light_bounds.width != black_bounds.width || light_bounds.x != black_bounds.x)
+        } else { panic("black instance has no bounds for A") }
+    } else { panic("light instance has no bounds for A") }
+}
+
+test "logical sizes scale metrics and preserve face identity" {
+    let intent = Font.StyleIntent(weight:560, width:90.0, slant:Font.Slant.oblique())
+    assert(intent.weight == 560)
+    assert(intent.width == 90.0)
+    match intent.slant { oblique => {}; else => { panic("style slant intention was not preserved") } }
+    var face = require_face(Font.Face.default())
+    var small = require_instance(Font.Instance.create(face, size:12.0))
+    var large = require_instance(Font.Instance.create(face, size:24.0))
+    var synthesized = require_instance(Font.Instance.create(
+        face,
+        size:12.0,
+        synthesis:Font.Synthesis(embolden:true)
+    ))
+    assert(small.face().identity() == large.face().identity())
+    assert(Math.abs(large.metrics().ascender - small.metrics().ascender * 2.0) < 0.000001)
+    assert(Math.abs(large.metrics().line_height - small.metrics().line_height * 2.0) < 0.000001)
+    assert(small.identity() != large.identity())
+    assert(small.identity() != synthesized.identity())
+}
+
+test "invalid instance inputs return typed errors" {
+    var face = require_face(Font.Face.default())
+    match Font.Instance.create(face, size:0.0) {
+        success(instance) => { panic("zero size was accepted") }
+        failure(error) => { match error.kind { invalid_size => {}; else => { panic("zero size returned the wrong error") } } }
     }
+    match Font.Instance.create(face, size:0.0 / 0.0) {
+        success(instance) => { panic("NaN size was accepted") }
+        failure(error) => { match error.kind { invalid_size => {}; else => { panic("NaN size returned the wrong error") } } }
+    }
+    match Font.Instance.create(face, size:18.0, variations:[Font.Variation("wght", 400.0), Font.Variation("wght", 500.0)]) {
+        success(instance) => { panic("duplicate axis was accepted") }
+        failure(error) => { match error.kind { duplicate_axis => {}; else => { panic("duplicate axis returned the wrong error") } } }
+    }
+    match Font.Instance.create(face, size:18.0, variations:[Font.Variation("bad", 1.0)]) {
+        success(instance) => { panic("short tag was accepted") }
+        failure(error) => { match error.kind { invalid_tag => {}; else => { panic("short tag returned the wrong error") } } }
+    }
+    match Font.Instance.create(face, size:18.0, variations:[Font.Variation("XXXX", 1.0)]) {
+        success(instance) => { panic("unknown axis was accepted") }
+        failure(error) => { match error.kind { unknown_axis => {}; else => { panic("unknown axis returned the wrong error") } } }
+    }
+    match Font.Instance.create(face, size:18.0, variations:[Font.Variation("wght", 5000.0)]) {
+        success(instance) => { panic("out-of-range coordinate was accepted") }
+        failure(error) => { match error.kind { variation_out_of_range => {}; else => { panic("out-of-range coordinate returned the wrong error") } } }
+    }
+    match Font.Instance.create(face, size:18.0, variations:[Font.Variation("wght", 0.0 / 0.0)]) {
+        success(instance) => { panic("NaN coordinate was accepted") }
+        failure(error) => { match error.kind { variation_out_of_range => {}; else => { panic("NaN coordinate returned the wrong error") } } }
+    }
+}
+
+test "missing files and corrupt bytes return distinct errors" {
+    match Font.Face.open("Tests/DefinitelyMissing.ttf") {
+        success(face) => { panic("missing file was accepted") }
+        failure(error) => { match error.kind { file_read => {}; else => { panic("missing file returned the wrong error") } } }
+    }
+    match Font.Face.decode([0 as uint8, 1 as uint8, 2 as uint8, 3 as uint8]) {
+        success(face) => { panic("corrupt bytes were accepted") }
+        failure(error) => { match error.kind { invalid_data => {}; else => { panic("corrupt bytes returned the wrong error") } } }
+    }
+    match Font.Face.decode([]) {
+        success(face) => { panic("empty bytes were accepted") }
+        failure(error) => { match error.kind { empty_data => {}; else => { panic("empty bytes returned the wrong error") } } }
+    }
+}
+
+test "bundled default and monospace assets have stable digests" {
+    let default_bytes = embed_bytes("../../../Assets/Fonts/NotoSans.ttf")
+    let mono_bytes = embed_bytes("../../../Assets/Fonts/NotoSansMono-Regular.ttf")
+    assert(Crypto.sha256(@default_bytes[0:default_bytes.count()]) == "bfb7bb691513f12e734dc346c03a03f784912432d7e3fa8e56efcf906fe86b3d")
+    assert(Crypto.sha256(@mono_bytes[0:mono_bytes.count()]) == "65b5e2b2c4a1fba9ae8be1f026cb35b03dcb8886d9b2a4147054fde12f7e767d")
+    var default_face = require_face(Font.Face.default())
+    var mono_face = require_face(Font.Face.monospace())
+    assert(default_face.identity() == "bfb7bb691513f12e734dc346c03a03f784912432d7e3fa8e56efcf906fe86b3d#0")
+    assert(mono_face.identity() == "65b5e2b2c4a1fba9ae8be1f026cb35b03dcb8886d9b2a4147054fde12f7e767d#0")
+    assert(require_family(default_face) == "Noto Sans")
+    assert(require_family(mono_face) == "Noto Sans Mono")
+}
+
+test "same face supports repeated concurrent immutable reads" {
+    var face = require_face(Font.Face.default())
+    var executor = Threading.Executor(worker_count:4)
+    var first = executor.submit(FaceReadJob(face:face, checksum:0.0))
+    var second = executor.submit(FaceReadJob(face:face, checksum:0.0))
+    var third = executor.submit(FaceReadJob(face:face, checksum:0.0))
+    var fourth = executor.submit(FaceReadJob(face:face, checksum:0.0))
+    var one = first.complete()
+    var two = second.complete()
+    var three = third.complete()
+    var four = fourth.complete()
+    assert(one.checksum == two.checksum)
+    assert(two.checksum == three.checksum)
+    assert(three.checksum == four.checksum)
 }

@@ -4,5 +4,7 @@ Copyright 2026 Matanek and Silex contributors
 This product is licensed under the Apache License, Version 2.0.
 
 GFX.Font distributes target-specific static artifacts built from FreeType and
-HarfBuzz. The FreeType Project License, the HarfBuzz license, and the license
-for the Noto Sans test fixture are kept in the Licenses directory.
+HarfBuzz. It also distributes Noto Sans and Noto Sans Mono assets and test
+fixtures derived from those fonts, plus a Source Code Pro CFF test fixture.
+The FreeType Project License, HarfBuzz license, Noto SIL Open Font License, and
+Source Code Pro SIL Open Font License are kept in the Licenses directory.

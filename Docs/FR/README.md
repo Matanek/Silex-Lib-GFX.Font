@@ -1,8 +1,9 @@
-# Ouvrir une face avec GFX.Font
+# Faces, instances et variations avec GFX.Font
 
-`GFX.Font` ouvre les fontes TTF, OTF et les collections TTC depuis des octets
-déjà possédés par l’application. Une face conserve sa propre copie des octets,
-expose des métadonnées portables et ferme automatiquement ses ressources.
+`GFX.Font` charge des fontes TTF, OTF/CFF et des collections TTC depuis des
+octets ou un fichier. Une `Face` représente toujours un indice précis dans les
+données encodées ; une `Instance` ajoute une taille logique, des coordonnées de
+variation et les synthèses explicitement demandées.
 
 [Read this documentation in English.](../EN/README.md)
 
@@ -14,41 +15,106 @@ silex install GFX.Font
 
 GFX.Font demande Silex 0.43.0 ou une version plus récente.
 
-## Ouvrir des octets de fonte
+## Charger une face
+
+`Face.decode` reçoit des octets possédés par l’application. `Face.open` lit le
+fichier en entier et le ferme avant de retourner : la face reste donc utilisable
+si le fichier est ensuite déplacé ou supprimé.
 
 ```sx
 use GFX.Font
 
-let bytes = embed_bytes("NotoSans.ttf")
-match Font.Face.try_open(bytes) {
+let bytes = embed_bytes("InterVariable.ttf")
+match Font.Face.decode(bytes) {
     failure(error) => { print(error.detail) }
     success(face) => {
-        print(face.family_name())
+        print(face.identity())
+        if family = face.family_name() { print(family) }
         print("$(face.glyph_count()) glyphes")
     }
 }
 ```
 
-`Face.try_open` distingue les données vides, les données qui ne décrivent pas
-une fonte, un indice absent dans une collection, une allocation impossible et
-une capacité native indisponible. `Error.kind` est stable ; `Error.detail`
-copie un détail UTF-8 destiné au diagnostic.
+Une collection accepte `face_index:`. `face_count()` donne le nombre d’indices
+valides. `identity()` combine le SHA-256 des octets et cet indice ; le chemin,
+l’adresse native et l’ordre de chargement n’y participent pas.
 
-Une collection accepte `index:` pour sélectionner sa face. `face_count()`
-indique les indices disponibles. `capabilities()` précise si la face fournit
-des contours, le shaping, des variations ou des glyphes couleur ; ces drapeaux
-n’obligent pas le développeur à connaître FreeType ou HarfBuzz.
+Les erreurs externes restent typées. `file_read`, `invalid_data`,
+`face_index_out_of_range` et `unsupported` permettent notamment de distinguer
+une lecture impossible, une ressource corrompue, une face absente et une
+capacité de décodage indisponible.
 
-`Face` ferme normalement ses ressources à la fin de sa durée de vie. `close()`
-permet de les libérer plus tôt et retourne `false` lorsqu’elles étaient déjà
-fermées.
+## Inspecter la face
 
-## Comprendre la Boundary
+`family_name()`, `subfamily_name()` et `postscript_name()` sont optionnels,
+car une fonte peut omettre ces noms. `supports(scalar:)` vérifie la couverture
+d’un scalar Unicode. `outline_kind()` distingue l’absence de contour, les
+contours TrueType quadratiques et les contours CFF cubiques ;
+`capabilities().outlines` convient lorsqu’une simple disponibilité suffit.
 
-Le package distribue le même shim C privé pour macOS ARM64, Linux x64, Windows
-x64 et Windows ARM64. Il retient les mêmes octets et le même indice de face
-pour FreeType 2.14.3 et HarfBuzz 14.2.1. Aucune fonte système, aucun handle
-natif et aucun type des deux bibliothèques ne traverse l’API publique.
+`face.metrics()` retourne les métriques en em. `units_per_em` conserve la
+valeur encodée ; ascender, descender, line gap, hauteur de ligne, underline et
+strikeout sont normalisés. L’axe vertical est positif vers le haut, donc un
+descender est normalement négatif.
 
-Windows ARM64 reste une cible reconnue et expérimentale : son archive et sa
-liaison constituent une preuve structurelle, pas une exécution native.
+## Créer une instance logique
+
+`Instance.create` est faillible afin de refuser une taille nulle, négative,
+infinie ou NaN et toute coordonnée invalide.
+
+```sx
+match Font.Face.decode(embed_bytes("InterVariable.ttf")) {
+    failure(error) => { print(error.detail) }
+    success(face) => {
+        match Font.Instance.create(
+            face,
+            size:18.0,
+            variations:[Font.Variation("wght", 560.0)]
+        ) {
+            failure(error) => { print(error.detail) }
+            success(instance) => {
+                let metrics = instance.metrics()
+                print("hauteur logique : $(metrics.line_height)")
+            }
+        }
+    }
+}
+```
+
+La taille désigne des unités logiques par em, indépendantes de la densité
+physique. Les métriques d’instance sont déjà mises à cette échelle. Deux tailles
+partagent l’identité de leur face, mais possèdent des identités d’instance
+différentes.
+
+`axes()` expose pour chaque tag OpenType de quatre octets son nom optionnel, son
+minimum, sa valeur par défaut et son maximum. `named_instances()` expose les
+coordonnées et les noms disponibles, mais ces noms localisés ne servent jamais
+de clé stable. Une instance ordonne ses coordonnées effectives selon les axes de
+la face ; axes inconnus, doublons, valeurs hors domaine et NaN sont refusés.
+
+`Synthesis(embolden:true)` et `Synthesis(oblique:true)` rendent toute synthèse
+explicite et l’intègrent à l’identité de l’instance. `StyleIntent` décrit un
+poids, une largeur et une inclinaison demandés ; il ne déclenche ni recherche de
+fonte système, ni substitution automatique, ni synthèse implicite.
+
+## Utiliser les fontes distribuées
+
+`Face.default()` charge Noto Sans variable et `Face.monospace()` charge Noto
+Sans Mono depuis les assets du package. Les deux fonctions retournent un
+`Result<Face, Error>` comme les autres parcours de chargement. Leurs fichiers et
+la licence SIL Open Font License se trouvent dans `Assets/Fonts` et `Licenses`.
+
+GFX.Font ne cherche pas les fontes installées sur la machine et ne télécharge
+rien. Une application compose ses faces à partir de ses assets et de chemins
+explicites.
+
+## Frontière native
+
+L’ABI privée v2 est distribuée pour macOS ARM64, Linux x64, Windows x64 et
+Windows ARM64. Une face possède ses octets et les vues FreeType/HarfBuzz
+correspondantes. Chaque instance possède son propre état HarfBuzz de variation ;
+les lectures répétées d’une face ne modifient donc pas une taille ou des
+coordonnées partagées. Aucun handle ni type natif ne traverse l’API publique.
+
+Windows ARM64 reste une cible reconnue et expérimentale : l’archive et la
+liaison fournissent une preuve structurelle, pas une exécution native.

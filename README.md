@@ -1,9 +1,9 @@
 # GFX.Font
 
-`GFX.Font` possède les fontes portables de GFX. Son premier socle ouvre une
-face TTF, OTF ou TTC depuis des octets, vérifie les capacités disponibles et
-conserve FreeType et HarfBuzz derrière une ABI C privée identique sur toutes
-les cibles.
+`GFX.Font` possède les fontes portables de GFX. Il charge des faces TTF,
+OTF/CFF et TTC depuis des octets ou un fichier, expose leurs noms, leur
+couverture Unicode, leurs métriques et leurs variations, puis crée des
+instances immuables à une taille logique.
 
 ```text
 silex install GFX.Font
@@ -15,5 +15,6 @@ silex install GFX.Font
 - [English documentation](Docs/EN/README.md)
 - [Reproduire les artefacts natifs](Native/README.md)
 
-Le package demande Silex 0.43.0 ou une version plus récente. Il ne découvre
-pas les fontes du système et n’expose aucun handle FreeType ou HarfBuzz.
+Le package demande Silex 0.43.0 ou une version plus récente. Il distribue Noto
+Sans variable et Noto Sans Mono, ne découvre pas les fontes système et n’expose
+aucun handle FreeType ou HarfBuzz.

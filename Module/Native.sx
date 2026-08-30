@@ -16,11 +16,8 @@ package struct Error {
     let detail:str
 }
 
-package struct FaceData {
-    let library:uint
-    let face:uint
-    let retained_bytes:str
-}
+package struct FaceData { let library:uint; let face:uint }
+package struct Bounds { let x:float64; let y:float64; let width:float64; let height:float64 }
 
 package func open(bytes:uint8[], face_index:int) Result<FaceData, Error> {
     match verify_abi() {
@@ -28,53 +25,96 @@ package func open(bytes:uint8[], face_index:int) Result<FaceData, Error> {
         success => {}
     }
     if bytes.count() == 0 {
-        return Result<FaceData, Error>.failure(Error(
-            kind:ErrorKind.empty_data,
-            detail:"font data cannot be empty"
-        ))
+        return Result<FaceData, Error>.failure(Error(kind:ErrorKind.empty_data, detail:"font data cannot be empty"))
     }
     if face_index < 0 {
-        return Result<FaceData, Error>.failure(Error(
-            kind:ErrorKind.face_index_out_of_range,
-            detail:"font face index cannot be negative"
-        ))
+        return Result<FaceData, Error>.failure(Error(kind:ErrorKind.face_index_out_of_range, detail:"font face index cannot be negative"))
     }
-
     let library = C.address_bits(library_create())
-    if library == 0 as uint {
-        return Result<FaceData, Error>.failure(last_error())
-    }
+    if library == 0 as uint { return Result<FaceData, Error>.failure(last_error()) }
     let packed = C.string(@bytes[0:bytes.count()])
-    let face = C.address_bits(face_create(
-        C.pointer_bits(library),
-        C.pointer(packed),
-        C.byte_count(packed),
-        face_index as int32
-    ))
+    let face = C.address_bits(face_create(C.pointer_bits(library), C.pointer(packed), C.byte_count(packed), face_index as int32))
     if face == 0 as uint {
         let error = last_error()
         library_destroy(C.pointer_bits(library))
         return Result<FaceData, Error>.failure(error)
     }
-    return Result<FaceData, Error>.success(FaceData(
-        library:library,
-        face:face,
-        retained_bytes:packed
-    ))
+    return Result<FaceData, Error>.success(FaceData(library:library, face:face))
 }
 
-package func close(library:uint, face:uint) {
+package func close_face(library:uint, face:uint) {
     face_destroy(C.pointer_bits(face))
     library_destroy(C.pointer_bits(library))
 }
+
+package func create_instance(face:uint) Result<uint, Error> {
+    let handle = C.address_bits(instance_create(C.pointer_bits(face)))
+    if handle == 0 as uint { return Result<uint, Error>.failure(last_error()) }
+    return Result<uint, Error>.success(handle)
+}
+
+package func set_variation(handle:uint, tag_value:uint32, value:float64) Result<void, Error> {
+    if instance_set_variation(C.pointer_bits(handle), tag_value, value as float32) == 0 {
+        return Result<void, Error>.failure(last_error())
+    }
+    return Result<void, Error>.success()
+}
+
+package func close_instance(handle:uint) { instance_destroy(C.pointer_bits(handle)) }
 
 package func index(handle:uint) int { return face_index(C.pointer_bits(handle)) as int }
 package func count(handle:uint) int { return face_count(C.pointer_bits(handle)) as int }
 package func glyph_count(handle:uint) int { return face_glyph_count(C.pointer_bits(handle)) as int }
 package func units_per_em(handle:uint) int { return face_units_per_em(C.pointer_bits(handle)) as int }
 package func capabilities(handle:uint) uint { return face_capabilities(C.pointer_bits(handle)) as uint }
+package func outline_kind(handle:uint) int { return face_outline_kind(C.pointer_bits(handle)) as int }
 package func family_name(handle:uint) str { return copy_text(face_family_name(C.pointer_bits(handle))) }
-package func style_name(handle:uint) str { return copy_text(face_style_name(C.pointer_bits(handle))) }
+package func subfamily_name(handle:uint) str { return copy_text(face_subfamily_name(C.pointer_bits(handle))) }
+package func postscript_name(handle:uint) str { return copy_text(face_postscript_name(C.pointer_bits(handle))) }
+package func supports_scalar(handle:uint, scalar:uint32) bool { return face_supports_scalar(C.pointer_bits(handle), scalar) != 0 }
+
+package func ascender(handle:uint) int { return signed32(face_ascender(C.pointer_bits(handle))) }
+package func descender(handle:uint) int { return signed32(face_descender(C.pointer_bits(handle))) }
+package func line_gap(handle:uint) int { return signed32(face_line_gap(C.pointer_bits(handle))) }
+package func line_height(handle:uint) int { return signed32(face_line_height(C.pointer_bits(handle))) }
+package func underline_position(handle:uint) int { return signed32(face_underline_position(C.pointer_bits(handle))) }
+package func underline_thickness(handle:uint) int { return signed32(face_underline_thickness(C.pointer_bits(handle))) }
+package func strikeout_position(handle:uint) int { return signed32(face_strikeout_position(C.pointer_bits(handle))) }
+package func strikeout_thickness(handle:uint) int { return signed32(face_strikeout_thickness(C.pointer_bits(handle))) }
+
+package func axis_count(handle:uint) int { return face_axis_count(C.pointer_bits(handle)) as int }
+package func axis_tag(handle:uint, index:int) str { return copy_text(tag_text(face_axis_tag(C.pointer_bits(handle), index as uint32))) }
+package func axis_name(handle:uint, index:int) str { return copy_text(face_axis_name(C.pointer_bits(handle), index as uint32)) }
+package func axis_minimum(handle:uint, index:int) float64 { return face_axis_minimum(C.pointer_bits(handle), index as uint32) as float64 }
+package func axis_default(handle:uint, index:int) float64 { return face_axis_default(C.pointer_bits(handle), index as uint32) as float64 }
+package func axis_maximum(handle:uint, index:int) float64 { return face_axis_maximum(C.pointer_bits(handle), index as uint32) as float64 }
+
+package func named_instance_count(handle:uint) int { return face_named_instance_count(C.pointer_bits(handle)) as int }
+package func named_instance_name(handle:uint, index:int) str { return copy_text(face_named_instance_name(C.pointer_bits(handle), index as uint32)) }
+package func named_instance_postscript_name(handle:uint, index:int) str { return copy_text(face_named_instance_postscript_name(C.pointer_bits(handle), index as uint32)) }
+package func named_instance_coordinate(handle:uint, instance_index:int, axis_index:int) float64 {
+    return face_named_instance_coordinate(C.pointer_bits(handle), instance_index as uint32, axis_index as uint32) as float64
+}
+
+package func tag(value:str) uint32 { return tag_from_bytes(C.pointer(value)) }
+
+package func scalar_bounds(handle:uint, scalar:uint32, units_per_em:int) Bounds? {
+    var x:int32 = 0
+    var y:int32 = 0
+    var width:int32 = 0
+    var height:int32 = 0
+    if instance_scalar_bounds(
+        C.pointer_bits(handle), scalar, C.mutable_pointer(x), C.mutable_pointer(y),
+        C.mutable_pointer(width), C.mutable_pointer(height)
+    ) == 0 { return null }
+    let scale = units_per_em as float64
+    return Bounds(
+        x:signed32(x) as float64 / scale,
+        y:signed32(y) as float64 / scale,
+        width:signed32(width) as float64 / scale,
+        height:signed32(height) as float64 / scale
+    )
+}
 
 package func abi_version_value() int { return abi_version() as int }
 package func abi_pointer_size_value() int { return abi_pointer_size() as int }
@@ -82,22 +122,14 @@ package func abi_size_size_value() int { return abi_size_size() as int }
 package func abi_pointer_alignment_value() int { return abi_pointer_alignment() as int }
 package func live_library_count() int { return boundary_live_library_count() as int }
 package func live_face_count() int { return boundary_live_face_count() as int }
+package func live_instance_count() int { return boundary_live_instance_count() as int }
 
 func verify_abi() Result<void, Error> {
-    if abi_version() != 1 as uint32 {
-        return Result<void, Error>.failure(Error(
-            kind:ErrorKind.abi_mismatch,
-            detail:"GFX.Font expected native ABI version 1"
-        ))
+    if abi_version() != 2 as uint32 {
+        return Result<void, Error>.failure(Error(kind:ErrorKind.abi_mismatch, detail:"GFX.Font expected native ABI version 2"))
     }
-    if abi_pointer_size() != 8 as uint32 ||
-        abi_size_size() != 8 as uint32 ||
-        abi_pointer_alignment() != 8 as uint32
-    {
-        return Result<void, Error>.failure(Error(
-            kind:ErrorKind.abi_mismatch,
-            detail:"GFX.Font requires the 64-bit Silex ABI layout"
-        ))
+    if abi_pointer_size() != 8 as uint32 || abi_size_size() != 8 as uint32 || abi_pointer_alignment() != 8 as uint32 {
+        return Result<void, Error>.failure(Error(kind:ErrorKind.abi_mismatch, detail:"GFX.Font requires the 64-bit Silex ABI layout"))
     }
     return Result<void, Error>.success()
 }
@@ -128,6 +160,12 @@ func copy_text(pointer:C.Pointer<uint8>) str {
     return "invalid native UTF-8 detail"
 }
 
+func signed32(value:int32) int {
+    let bits = value as uint32
+    if bits > 2147483647 as uint32 { return bits as int - 4294967296 }
+    return bits as int
+}
+
 let abi_version = C.function<func() uint32>(library:Boundary.FontBoundary, name:"silex_font_abi_version")
 let abi_pointer_size = C.function<func() uint32>(library:Boundary.FontBoundary, name:"silex_font_abi_pointer_size")
 let abi_size_size = C.function<func() uint32>(library:Boundary.FontBoundary, name:"silex_font_abi_size_size")
@@ -141,9 +179,37 @@ let face_count = C.function<func(C.Pointer<uint8>) int32>(library:Boundary.FontB
 let face_glyph_count = C.function<func(C.Pointer<uint8>) int32>(library:Boundary.FontBoundary, name:"silex_font_face_glyph_count")
 let face_units_per_em = C.function<func(C.Pointer<uint8>) int32>(library:Boundary.FontBoundary, name:"silex_font_face_units_per_em")
 let face_capabilities = C.function<func(C.Pointer<uint8>) uint32>(library:Boundary.FontBoundary, name:"silex_font_face_capabilities")
+let face_outline_kind = C.function<func(C.Pointer<uint8>) int32>(library:Boundary.FontBoundary, name:"silex_font_face_outline_kind")
 let face_family_name = C.function<func(C.Pointer<uint8>) C.Pointer<uint8> >(library:Boundary.FontBoundary, name:"silex_font_face_family_name")
-let face_style_name = C.function<func(C.Pointer<uint8>) C.Pointer<uint8> >(library:Boundary.FontBoundary, name:"silex_font_face_style_name")
+let face_subfamily_name = C.function<func(C.Pointer<uint8>) C.Pointer<uint8> >(library:Boundary.FontBoundary, name:"silex_font_face_subfamily_name")
+let face_postscript_name = C.function<func(C.Pointer<uint8>) C.Pointer<uint8> >(library:Boundary.FontBoundary, name:"silex_font_face_postscript_name")
+let face_supports_scalar = C.function<func(C.Pointer<uint8>, uint32) int32>(library:Boundary.FontBoundary, name:"silex_font_face_supports_scalar")
+let face_ascender = C.function<func(C.Pointer<uint8>) int32>(library:Boundary.FontBoundary, name:"silex_font_face_ascender")
+let face_descender = C.function<func(C.Pointer<uint8>) int32>(library:Boundary.FontBoundary, name:"silex_font_face_descender")
+let face_line_gap = C.function<func(C.Pointer<uint8>) int32>(library:Boundary.FontBoundary, name:"silex_font_face_line_gap")
+let face_line_height = C.function<func(C.Pointer<uint8>) int32>(library:Boundary.FontBoundary, name:"silex_font_face_line_height")
+let face_underline_position = C.function<func(C.Pointer<uint8>) int32>(library:Boundary.FontBoundary, name:"silex_font_face_underline_position")
+let face_underline_thickness = C.function<func(C.Pointer<uint8>) int32>(library:Boundary.FontBoundary, name:"silex_font_face_underline_thickness")
+let face_strikeout_position = C.function<func(C.Pointer<uint8>) int32>(library:Boundary.FontBoundary, name:"silex_font_face_strikeout_position")
+let face_strikeout_thickness = C.function<func(C.Pointer<uint8>) int32>(library:Boundary.FontBoundary, name:"silex_font_face_strikeout_thickness")
+let face_axis_count = C.function<func(C.Pointer<uint8>) uint32>(library:Boundary.FontBoundary, name:"silex_font_face_axis_count")
+let face_axis_tag = C.function<func(C.Pointer<uint8>, uint32) uint32>(library:Boundary.FontBoundary, name:"silex_font_face_axis_tag")
+let face_axis_name = C.function<func(C.Pointer<uint8>, uint32) C.Pointer<uint8> >(library:Boundary.FontBoundary, name:"silex_font_face_axis_name")
+let face_axis_minimum = C.function<func(C.Pointer<uint8>, uint32) float32>(library:Boundary.FontBoundary, name:"silex_font_face_axis_minimum")
+let face_axis_default = C.function<func(C.Pointer<uint8>, uint32) float32>(library:Boundary.FontBoundary, name:"silex_font_face_axis_default")
+let face_axis_maximum = C.function<func(C.Pointer<uint8>, uint32) float32>(library:Boundary.FontBoundary, name:"silex_font_face_axis_maximum")
+let face_named_instance_count = C.function<func(C.Pointer<uint8>) uint32>(library:Boundary.FontBoundary, name:"silex_font_face_named_instance_count")
+let face_named_instance_name = C.function<func(C.Pointer<uint8>, uint32) C.Pointer<uint8> >(library:Boundary.FontBoundary, name:"silex_font_face_named_instance_name")
+let face_named_instance_postscript_name = C.function<func(C.Pointer<uint8>, uint32) C.Pointer<uint8> >(library:Boundary.FontBoundary, name:"silex_font_face_named_instance_postscript_name")
+let face_named_instance_coordinate = C.function<func(C.Pointer<uint8>, uint32, uint32) float32>(library:Boundary.FontBoundary, name:"silex_font_face_named_instance_coordinate")
+let tag_from_bytes = C.function<func(C.Pointer<uint8>) uint32>(library:Boundary.FontBoundary, name:"silex_font_tag_from_bytes")
+let tag_text = C.function<func(uint32) C.Pointer<uint8> >(library:Boundary.FontBoundary, name:"silex_font_tag_text")
+let instance_create = C.function<func(C.Pointer<uint8>) C.Pointer<uint8> >(library:Boundary.FontBoundary, name:"silex_font_instance_create")
+let instance_set_variation = C.function<func(C.Pointer<uint8>, uint32, float32) int32>(library:Boundary.FontBoundary, name:"silex_font_instance_set_variation")
+let instance_destroy = C.function<func(C.Pointer<uint8>) void>(library:Boundary.FontBoundary, name:"silex_font_instance_destroy")
+let instance_scalar_bounds = C.function<func(C.Pointer<uint8>, uint32, C.MutablePointer<int32>, C.MutablePointer<int32>, C.MutablePointer<int32>, C.MutablePointer<int32>) int32>(library:Boundary.FontBoundary, name:"silex_font_instance_scalar_bounds")
 let boundary_last_error_code = C.function<func() int32>(library:Boundary.FontBoundary, name:"silex_font_last_error_code")
 let boundary_last_error_detail = C.function<func() C.Pointer<uint8> >(library:Boundary.FontBoundary, name:"silex_font_last_error_detail")
 let boundary_live_library_count = C.function<func() uint32>(library:Boundary.FontBoundary, name:"silex_font_live_library_count")
 let boundary_live_face_count = C.function<func() uint32>(library:Boundary.FontBoundary, name:"silex_font_live_face_count")
+let boundary_live_instance_count = C.function<func() uint32>(library:Boundary.FontBoundary, name:"silex_font_live_instance_count")

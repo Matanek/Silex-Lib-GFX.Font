@@ -1,18 +1,16 @@
 use GFX.Font
 
 func main() {
-    let bytes = embed_bytes("../Tests/Fixtures/Minimal.ttf")
-    var cycle = 0
-    while cycle < 2 {
-        match Font.Face.try_open(bytes) {
-            failure(error) => { panic(error.detail) }
-            success(face) => {
-                assert(face.family_name() == "Noto Sans")
-                assert(face.capabilities().shaping)
-                assert(face.close())
-                assert(!face.close())
+    match Font.Face.default() {
+        failure(error) => { panic(error.detail) }
+        success(face) => {
+            match Font.Instance.create(face, size:18.0, variations:[Font.Variation("wght", 560.0)]) {
+                failure(error) => { panic(error.detail) }
+                success(instance) => {
+                    assert(instance.metrics().line_height > 18.0)
+                    assert(face.supports(65 as uint32))
+                }
             }
         }
-        cycle++
     }
 }
