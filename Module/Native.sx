@@ -1,0 +1,149 @@
+use Interop.Boundary
+use Interop.C
+
+package enum ErrorKind {
+    empty_data
+    invalid_data
+    face_index_out_of_range
+    out_of_memory
+    unsupported
+    abi_mismatch
+    native_failure
+}
+
+package struct Error {
+    let kind:ErrorKind
+    let detail:str
+}
+
+package struct FaceData {
+    let library:uint
+    let face:uint
+    let retained_bytes:str
+}
+
+package func open(bytes:uint8[], face_index:int) Result<FaceData, Error> {
+    match verify_abi() {
+        failure(error) => { return Result<FaceData, Error>.failure(error) }
+        success => {}
+    }
+    if bytes.count() == 0 {
+        return Result<FaceData, Error>.failure(Error(
+            kind:ErrorKind.empty_data,
+            detail:"font data cannot be empty"
+        ))
+    }
+    if face_index < 0 {
+        return Result<FaceData, Error>.failure(Error(
+            kind:ErrorKind.face_index_out_of_range,
+            detail:"font face index cannot be negative"
+        ))
+    }
+
+    let library = C.address_bits(library_create())
+    if library == 0 as uint {
+        return Result<FaceData, Error>.failure(last_error())
+    }
+    let packed = C.string(@bytes[0:bytes.count()])
+    let face = C.address_bits(face_create(
+        C.pointer_bits(library),
+        C.pointer(packed),
+        C.byte_count(packed),
+        face_index as int32
+    ))
+    if face == 0 as uint {
+        let error = last_error()
+        library_destroy(C.pointer_bits(library))
+        return Result<FaceData, Error>.failure(error)
+    }
+    return Result<FaceData, Error>.success(FaceData(
+        library:library,
+        face:face,
+        retained_bytes:packed
+    ))
+}
+
+package func close(library:uint, face:uint) {
+    face_destroy(C.pointer_bits(face))
+    library_destroy(C.pointer_bits(library))
+}
+
+package func index(handle:uint) int { return face_index(C.pointer_bits(handle)) as int }
+package func count(handle:uint) int { return face_count(C.pointer_bits(handle)) as int }
+package func glyph_count(handle:uint) int { return face_glyph_count(C.pointer_bits(handle)) as int }
+package func units_per_em(handle:uint) int { return face_units_per_em(C.pointer_bits(handle)) as int }
+package func capabilities(handle:uint) uint { return face_capabilities(C.pointer_bits(handle)) as uint }
+package func family_name(handle:uint) str { return copy_text(face_family_name(C.pointer_bits(handle))) }
+package func style_name(handle:uint) str { return copy_text(face_style_name(C.pointer_bits(handle))) }
+
+package func abi_version_value() int { return abi_version() as int }
+package func abi_pointer_size_value() int { return abi_pointer_size() as int }
+package func abi_size_size_value() int { return abi_size_size() as int }
+package func abi_pointer_alignment_value() int { return abi_pointer_alignment() as int }
+package func live_library_count() int { return boundary_live_library_count() as int }
+package func live_face_count() int { return boundary_live_face_count() as int }
+
+func verify_abi() Result<void, Error> {
+    if abi_version() != 1 as uint32 {
+        return Result<void, Error>.failure(Error(
+            kind:ErrorKind.abi_mismatch,
+            detail:"GFX.Font expected native ABI version 1"
+        ))
+    }
+    if abi_pointer_size() != 8 as uint32 ||
+        abi_size_size() != 8 as uint32 ||
+        abi_pointer_alignment() != 8 as uint32
+    {
+        return Result<void, Error>.failure(Error(
+            kind:ErrorKind.abi_mismatch,
+            detail:"GFX.Font requires the 64-bit Silex ABI layout"
+        ))
+    }
+    return Result<void, Error>.success()
+}
+
+func last_error() Error {
+    let code = boundary_last_error_code()
+    var kind = ErrorKind.native_failure
+    if code == 1 { kind = ErrorKind.empty_data }
+    if code == 2 { kind = ErrorKind.invalid_data }
+    if code == 3 { kind = ErrorKind.face_index_out_of_range }
+    if code == 4 { kind = ErrorKind.out_of_memory }
+    if code == 5 { kind = ErrorKind.unsupported }
+    if code == 6 { kind = ErrorKind.abi_mismatch }
+    return Error(kind:kind, detail:copy_text(boundary_last_error_detail()))
+}
+
+func copy_text(pointer:C.Pointer<uint8>) str {
+    let address = C.address_bits(pointer)
+    if address == 0 as uint { return "" }
+    var bytes:uint8[] = []
+    var index = 0
+    while index < 4096 {
+        let byte = C.load<uint8>(address, index as uint)
+        if byte == 0 { return C.string(@bytes[0:bytes.count()]) }
+        bytes.append(byte)
+        index++
+    }
+    return "invalid native UTF-8 detail"
+}
+
+let abi_version = C.function<func() uint32>(library:Boundary.FontBoundary, name:"silex_font_abi_version")
+let abi_pointer_size = C.function<func() uint32>(library:Boundary.FontBoundary, name:"silex_font_abi_pointer_size")
+let abi_size_size = C.function<func() uint32>(library:Boundary.FontBoundary, name:"silex_font_abi_size_size")
+let abi_pointer_alignment = C.function<func() uint32>(library:Boundary.FontBoundary, name:"silex_font_abi_pointer_alignment")
+let library_create = C.function<func() C.Pointer<uint8> >(library:Boundary.FontBoundary, name:"silex_font_library_create")
+let library_destroy = C.function<func(C.Pointer<uint8>) void>(library:Boundary.FontBoundary, name:"silex_font_library_destroy")
+let face_create = C.function<func(C.Pointer<uint8>, C.Pointer<uint8>, C.Size, int32) C.Pointer<uint8> >(library:Boundary.FontBoundary, name:"silex_font_face_create")
+let face_destroy = C.function<func(C.Pointer<uint8>) void>(library:Boundary.FontBoundary, name:"silex_font_face_destroy")
+let face_index = C.function<func(C.Pointer<uint8>) int32>(library:Boundary.FontBoundary, name:"silex_font_face_index")
+let face_count = C.function<func(C.Pointer<uint8>) int32>(library:Boundary.FontBoundary, name:"silex_font_face_count")
+let face_glyph_count = C.function<func(C.Pointer<uint8>) int32>(library:Boundary.FontBoundary, name:"silex_font_face_glyph_count")
+let face_units_per_em = C.function<func(C.Pointer<uint8>) int32>(library:Boundary.FontBoundary, name:"silex_font_face_units_per_em")
+let face_capabilities = C.function<func(C.Pointer<uint8>) uint32>(library:Boundary.FontBoundary, name:"silex_font_face_capabilities")
+let face_family_name = C.function<func(C.Pointer<uint8>) C.Pointer<uint8> >(library:Boundary.FontBoundary, name:"silex_font_face_family_name")
+let face_style_name = C.function<func(C.Pointer<uint8>) C.Pointer<uint8> >(library:Boundary.FontBoundary, name:"silex_font_face_style_name")
+let boundary_last_error_code = C.function<func() int32>(library:Boundary.FontBoundary, name:"silex_font_last_error_code")
+let boundary_last_error_detail = C.function<func() C.Pointer<uint8> >(library:Boundary.FontBoundary, name:"silex_font_last_error_detail")
+let boundary_live_library_count = C.function<func() uint32>(library:Boundary.FontBoundary, name:"silex_font_live_library_count")
+let boundary_live_face_count = C.function<func() uint32>(library:Boundary.FontBoundary, name:"silex_font_live_face_count")

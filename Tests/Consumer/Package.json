@@ -1,0 +1,8 @@
+{
+  "sources": "Tests",
+  "dependencies": {
+    "GFX": "^0.39.0",
+    "GFX.Font": "^0.1.0",
+    "STD": "^0.16.0"
+  }
+}

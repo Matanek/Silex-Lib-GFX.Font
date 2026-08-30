@@ -1,0 +1,92 @@
+use GFX.Font.Native
+
+public enum ErrorKind {
+    empty_data
+    invalid_data
+    face_index_out_of_range
+    out_of_memory
+    unsupported
+    abi_mismatch
+    native_failure
+}
+
+public struct Error {
+    let kind:ErrorKind
+    let detail:str
+}
+
+public struct Capabilities {
+    let outlines:bool
+    let shaping:bool
+    let variations:bool
+    let color:bool
+}
+
+public class Face {
+    private var library_handle:uint
+    private var face_handle:uint
+    private let retained_bytes:str
+
+    private init(data:Native.FaceData) {
+        self.library_handle = data.library
+        self.face_handle = data.face
+        self.retained_bytes = data.retained_bytes
+    }
+
+    drop { self.close() }
+
+    static func try_open(bytes:uint8[], index:int = 0) Result<Face, Error> {
+        match Native.open(bytes, index) {
+            failure(error) => {
+                return Result<Face, Error>.failure(Error(
+                    kind:public_error_kind(error.kind),
+                    detail:error.detail
+                ))
+            }
+            success(data) => { return Result<Face, Error>.success(Face(data)) }
+        }
+    }
+
+    func is_open() bool { return self.face_handle != 0 as uint }
+    func index() int { self.require_open(); return Native.index(self.face_handle) }
+    func face_count() int { self.require_open(); return Native.count(self.face_handle) }
+    func glyph_count() int { self.require_open(); return Native.glyph_count(self.face_handle) }
+    func units_per_em() int { self.require_open(); return Native.units_per_em(self.face_handle) }
+    func family_name() str { self.require_open(); return Native.family_name(self.face_handle) }
+    func style_name() str { self.require_open(); return Native.style_name(self.face_handle) }
+
+    func capabilities() Capabilities {
+        self.require_open()
+        let value = Native.capabilities(self.face_handle)
+        return Capabilities(
+            outlines:(value & (1 as uint)) != 0 as uint,
+            shaping:(value & (2 as uint)) != 0 as uint,
+            variations:(value & (4 as uint)) != 0 as uint,
+            color:(value & (8 as uint)) != 0 as uint
+        )
+    }
+
+    func close() bool {
+        if self.face_handle == 0 as uint { return false }
+        Native.close(self.library_handle, self.face_handle)
+        self.face_handle = 0 as uint
+        self.library_handle = 0 as uint
+        return true
+    }
+
+    private func require_open() {
+        if !self.is_open() { panic("GFX.Font face is closed") }
+    }
+}
+
+func public_error_kind(kind:Native.ErrorKind) ErrorKind {
+    match kind {
+        empty_data => { return ErrorKind.empty_data }
+        invalid_data => { return ErrorKind.invalid_data }
+        face_index_out_of_range => { return ErrorKind.face_index_out_of_range }
+        out_of_memory => { return ErrorKind.out_of_memory }
+        unsupported => { return ErrorKind.unsupported }
+        abi_mismatch => { return ErrorKind.abi_mismatch }
+        native_failure => { return ErrorKind.native_failure }
+    }
+}

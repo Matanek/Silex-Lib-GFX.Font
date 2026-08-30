@@ -1,0 +1,73 @@
+{
+  "name": "GFX.Font",
+  "version": "0.1.0",
+  "description": {
+    "en": "Portable font faces, shaping foundations, vector outlines, and hinted coverage for GFX.",
+    "fr": "Faces de fonte portables, socle de shaping, contours vectoriels et couvertures hintées pour GFX."
+  },
+  "authors": ["Matanek"],
+  "requires": { "silex": ">=0.43.0" },
+  "dependencies": {
+    "GFX": "^0.39.0",
+    "STD": "^0.16.0"
+  },
+  "boundary": {
+    "macos-arm64": {
+      "providers": {
+        "FontBoundary": {
+          "archive": "Boundary/macos-arm64/libSilexFont.a",
+          "requires": ["GFX.Font.FreeType", "GFX.Font.HarfBuzz"]
+        },
+        "FreeType": {
+          "archive": "Boundary/macos-arm64/libfreetype.a"
+        },
+        "HarfBuzz": {
+          "archive": "Boundary/macos-arm64/libharfbuzz.a"
+        }
+      }
+    },
+    "linux-x64": {
+      "providers": {
+        "FontBoundary": {
+          "archive": "Boundary/linux-x64/libSilexFont.a",
+          "requires": ["GFX.Font.FreeType", "GFX.Font.HarfBuzz"],
+          "libraries": ["m", "pthread"]
+        },
+        "FreeType": {
+          "archive": "Boundary/linux-x64/libfreetype.a"
+        },
+        "HarfBuzz": {
+          "archive": "Boundary/linux-x64/libharfbuzz.a"
+        }
+      }
+    },
+    "windows-x64": {
+      "providers": {
+        "FontBoundary": {
+          "archive": "Boundary/windows-x64/SilexFont.lib",
+          "requires": ["GFX.Font.FreeType", "GFX.Font.HarfBuzz"]
+        },
+        "FreeType": {
+          "archive": "Boundary/windows-x64/freetype.lib"
+        },
+        "HarfBuzz": {
+          "archive": "Boundary/windows-x64/harfbuzz.lib"
+        }
+      }
+    },
+    "windows-arm64": {
+      "providers": {
+        "FontBoundary": {
+          "archive": "Boundary/windows-arm64/SilexFont.lib",
+          "requires": ["GFX.Font.FreeType", "GFX.Font.HarfBuzz"]
+        },
+        "FreeType": {
+          "archive": "Boundary/windows-arm64/freetype.lib"
+        },
+        "HarfBuzz": {
+          "archive": "Boundary/windows-arm64/harfbuzz.lib"
+        }
+      }
+    }
+  }
+}

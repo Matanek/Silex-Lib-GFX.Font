@@ -1,0 +1,53 @@
+use GFX.Font
+
+test "open retained bytes and expose portable face metadata" {
+    let bytes = embed_bytes("../../Fixtures/Minimal.ttf")
+    match Font.Face.try_open(bytes) {
+        failure(error) => { panic(error.detail) }
+        success(face) => {
+            assert(face.is_open())
+            assert(face.index() == 0)
+            assert(face.face_count() == 1)
+            assert(face.glyph_count() > 0)
+            assert(face.units_per_em() > 0)
+            assert(face.family_name() == "Noto Sans")
+            assert(face.capabilities().outlines)
+            assert(face.capabilities().shaping)
+            assert(face.close())
+            assert(!face.close())
+        }
+    }
+}
+
+test "distinguish empty invalid and absent-face inputs" {
+    match Font.Face.try_open([]) {
+        success(face) => { face.close(); panic("empty font data was accepted") }
+        failure(error) => {
+            match error.kind {
+                empty_data => {}
+                else => { panic("empty font data returned the wrong error") }
+            }
+        }
+    }
+
+    match Font.Face.try_open([0 as uint8, 1 as uint8, 2 as uint8, 3 as uint8]) {
+        success(face) => { face.close(); panic("invalid font data was accepted") }
+        failure(error) => {
+            match error.kind {
+                invalid_data => {}
+                else => { panic("invalid font data returned the wrong error") }
+            }
+        }
+    }
+
+    let bytes = embed_bytes("../../Fixtures/Minimal.ttf")
+    match Font.Face.try_open(bytes, index:1) {
+        success(face) => { face.close(); panic("an absent font face was accepted") }
+        failure(error) => {
+            match error.kind {
+                face_index_out_of_range => {}
+                else => { panic("an absent face returned the wrong error") }
+            }
+        }
+    }
+}

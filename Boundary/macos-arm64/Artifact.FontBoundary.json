@@ -1,0 +1,16 @@
+{
+  "abi": "silex-font-1",
+  "target": "macos-arm64",
+  "linkage": "static",
+  "artifacts": {
+    "SilexFont": "1cd83304b5cad4c86d2ec858cab8283d87009919ac42d6c7b4db72c31ae262a2",
+    "FreeType": "9fb15f939f279cd5171039b158f353bace9ec56f3ef09bf968db1f2ec4afe035",
+    "HarfBuzz": "38b0571bdd0ca75b02813a4601bb5201533a995981ceb709ea35b6a4e1d0b39a"
+  },
+  "upstream": {
+    "FreeType": "2.14.3@0a0221a1347e2f1e07c395263540026e9a0aa7c7",
+    "HarfBuzz": "14.2.1@56feae4035bdd48f62ba2b8d8c16232d4d89b3a4"
+  },
+  "codecs": [],
+  "system_dependencies": []
+}

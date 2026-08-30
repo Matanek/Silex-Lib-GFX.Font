@@ -1,0 +1,16 @@
+{
+  "abi": "silex-font-1",
+  "target": "windows-x64",
+  "linkage": "static",
+  "artifacts": {
+    "SilexFont": "03bc76391cd5fbd116e4b414b180f45a592d30eab695cfae564f21f19f40a77e",
+    "FreeType": "cd7098e9850246ea55b7ea180511ef34965c1d841960d07620806b994af9a35d",
+    "HarfBuzz": "1f36072e88639978958cd3193783d8ab97f6c19c2f45721799964ea2203d2d35"
+  },
+  "upstream": {
+    "FreeType": "2.14.3@0a0221a1347e2f1e07c395263540026e9a0aa7c7",
+    "HarfBuzz": "14.2.1@56feae4035bdd48f62ba2b8d8c16232d4d89b3a4"
+  },
+  "codecs": [],
+  "system_dependencies": []
+}

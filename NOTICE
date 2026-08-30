@@ -1,0 +1,8 @@
+Silex GFX.Font
+Copyright 2026 Matanek and Silex contributors
+
+This product is licensed under the Apache License, Version 2.0.
+
+GFX.Font distributes target-specific static artifacts built from FreeType and
+HarfBuzz. The FreeType Project License, the HarfBuzz license, and the license
+for the Noto Sans test fixture are kept in the Licenses directory.
