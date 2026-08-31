@@ -133,6 +133,13 @@ suit la direction du run : il est donc normalement descendant pour un run RTL.
 l’offset de placement et peut être passée directement au consommateur du
 glyphe.
 
+`GlyphRun.place_clusters(starts, origins, advance)` déplace ensuite des
+clusters déjà façonnés vers des origines explicites, par exemple les cellules
+d’un terminal. `starts` emploie les mêmes offsets UTF-8 ordonnés et commence à
+zéro pour un texte non vide. Les glyphes, marks et clusters restent ceux du
+run ; seule leur origine et l’avance logique composée changent. Une cardinalité
+incohérente ou une frontière invalide retourne `invalid_placement`.
+
 `RunMetrics.advance` donne l’avance logique totale. `logical_bounds` décrit la
 ligne, `ink_bounds` seulement l’encre effectivement dessinée, et les métriques
 de baseline, ascender, descender et hauteur de ligne viennent de la même
@@ -229,8 +236,11 @@ match run.rasterize(Font.RasterOptions(
 }
 ```
 
-`alpha` contient `height * stride` octets, avec un `stride` compact égal à la
-largeur. Les lignes sont rangées du haut vers le bas. `origin` place le coin
+`alpha()` retourne `height * stride` octets, avec un `stride` compact égal à
+la largeur. `packed_alpha()` expose le même stockage contigu sans le convertir
+en tableau ; c’est le parcours prévu pour Canvas, les uploads et les autres
+consommateurs sensibles aux copies. Les lignes sont rangées du haut vers le
+bas. `origin` place le coin
 supérieur gauche du masque dans le repère physique du run, dont la baseline est
 à Y = 0 et l’axe Y pointe vers le haut ; `baseline` donne donc la ligne de cette
 baseline relativement au sommet. Cet indice signé peut se trouver hors du
@@ -253,6 +263,15 @@ couvertures de runs appartiennent à l’instance et sont limitées séparément
 les rasteriser de nouveau, tandis que les anciennes lignes sont évincées sans
 vider le cache de glyphes. L’antialiasing RGB subpixel et les glyphes couleur
 ne font pas partie de cette première couverture alpha.
+
+Un renderer retenu peut éviter de recomposer toute une ligne modifiée. Après le
+shaping, `Instance.rasterize_glyph(glyph_id, options)` retourne une
+`GlyphCoverage` pour l’identifiant exact du run. `left` et `top` placent ce
+bitmap relativement à l’origine et à la baseline du glyphe ; `density`,
+`alpha()` et `packed_alpha()` suivent le même contrat que la couverture de run.
+Le résultat peut être vide pour un glyphe sans encre. Cette API ne remappe
+jamais le texte et ne remplace pas les positions du `GlyphRun` : le renderer
+doit dessiner les glyphes dans leur ordre avec leurs origines façonnées.
 
 ## Utiliser les fontes distribuées
 

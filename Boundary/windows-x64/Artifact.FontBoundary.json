@@ -3,7 +3,7 @@
   "target": "windows-x64",
   "linkage": "static",
   "artifacts": {
-    "SilexFont": "8faa853b69c774485308abff350ebbd3538b9a16fa999089efea35b6a825369a",
+    "SilexFont": "282d1d41a4bec7e367212c04c39c869726ba613d6980dd60bd87260d46c91974",
     "FreeType": "cd7098e9850246ea55b7ea180511ef34965c1d841960d07620806b994af9a35d",
     "HarfBuzz": "1f36072e88639978958cd3193783d8ab97f6c19c2f45721799964ea2203d2d35"
   },

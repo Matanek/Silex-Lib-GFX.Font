@@ -130,6 +130,13 @@ descending in an RTL run. `advance()`, `offset()`, and `origin()` stay
 distinct; the origin includes placement offset and can be passed directly to a
 glyph consumer.
 
+`GlyphRun.place_clusters(starts, origins, advance)` then moves already-shaped
+clusters to explicit origins, such as terminal cells. `starts` uses the same
+ordered UTF-8 offsets and begins at zero for non-empty text. Glyphs, marks, and
+clusters remain those of the run; only their origins and composed logical
+advance change. A mismatched cardinality or invalid boundary returns
+`invalid_placement`.
+
 `RunMetrics.advance` is the total logical advance. `logical_bounds` describes
 the line, `ink_bounds` describes only drawn ink, and baseline, ascender,
 descender, and line height come from the same instance. A space advances
@@ -221,8 +228,10 @@ match run.rasterize(Font.RasterOptions(
 }
 ```
 
-`alpha` contains `height * stride` bytes, with a compact stride equal to the
-width. Rows are stored from top to bottom. `origin` places the mask’s top-left
+`alpha()` returns `height * stride` bytes, with a compact stride equal to the
+width. `packed_alpha()` exposes the same contiguous storage without converting
+it to an array; this is the intended path for Canvas, uploads, and other
+copy-sensitive consumers. Rows are stored from top to bottom. `origin` places the mask’s top-left
 corner in the run’s physical coordinate system, whose baseline is Y = 0 and
 whose Y axis points upward; `baseline` therefore gives its signed row
 coordinate relative to the coverage top. This index may lie outside the
@@ -243,6 +252,14 @@ the instance and have a separate 8 MiB limit. A changed line can therefore
 recompose warm glyphs without rasterizing them again, while historical lines
 are evicted without clearing the glyph cache. RGB subpixel antialiasing and
 color glyphs are outside this first alpha-coverage format.
+
+A retained renderer can avoid recomposing an entire changed line. After
+shaping, `Instance.rasterize_glyph(glyph_id, options)` returns a
+`GlyphCoverage` for the run’s exact glyph ID. `left` and `top` place that bitmap
+relative to the glyph origin and baseline; `density`, `alpha()`, and
+`packed_alpha()` follow the run-coverage contract. The result can be empty for
+a glyph without ink. This API never remaps text or replaces `GlyphRun`
+positions: the renderer must draw glyphs in order at their shaped origins.
 
 ## Use bundled fonts
 

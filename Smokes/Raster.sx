@@ -30,7 +30,8 @@ func require_coverage(result:Result<Font.Coverage, Font.Error>) Font.Coverage {
 }
 
 func report(label:str, coverage:Font.Coverage) {
-    let digest = Crypto.sha256(@coverage.alpha[0:coverage.alpha.count()])
+    let alpha = coverage.alpha()
+    let digest = Crypto.sha256(@alpha[0:alpha.count()])
     print("$(label) $(coverage.width)x$(coverage.height) origin=$(coverage.origin.x),$(coverage.origin.y) baseline=$(coverage.baseline) sha256=$(digest)")
 }
 

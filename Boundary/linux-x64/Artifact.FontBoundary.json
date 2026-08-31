@@ -3,7 +3,7 @@
   "target": "linux-x64",
   "linkage": "static",
   "artifacts": {
-    "SilexFont": "0bd5c545cb482312742f4ee00b1a659410d0c78336b5eae7e3d6f7347e9ce40b",
+    "SilexFont": "dd7311b333b557b2daa8e3f9bc6e4fcea50ca4b4308d6d54ca9a9f78aea81528",
     "FreeType": "b81ff37204e02285c377b8af4c975fbfcd2d04b4e05125e8f1c70b117e831f4c",
     "HarfBuzz": "e62c9caeb526071ee9f5411cb31f09f6f6b7274b7245daae313a55fc95cc1ef3"
   },

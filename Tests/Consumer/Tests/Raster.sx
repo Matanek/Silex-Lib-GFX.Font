@@ -36,11 +36,24 @@ func require_coverage(
     }
 }
 
+func require_glyph_coverage(
+    result:Result<Font.GlyphCoverage?, Font.Error>
+) Font.GlyphCoverage {
+    match result {
+        failure(error) => { panic(error.detail) }
+        success(coverage) => {
+            if value = coverage { return value }
+            panic("expected glyph coverage")
+        }
+    }
+}
+
 func coverage_digest(coverage:Font.Coverage) str {
-    if coverage.alpha.count() == 0 {
+    let alpha = coverage.alpha()
+    if alpha.count() == 0 {
         return "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     }
-    return Crypto.sha256(@coverage.alpha[0:coverage.alpha.count()])
+    return Crypto.sha256(@alpha[0:alpha.count()])
 }
 
 test "hinted grayscale coverage preserves logical metrics and physical density" {
@@ -53,8 +66,8 @@ test "hinted grayscale coverage preserves logical metrics and physical density" 
     assert(!two.is_empty())
     assert(one.stride == one.width)
     assert(two.stride == two.width)
-    assert(one.alpha.count() == one.width * one.height)
-    assert(two.alpha.count() == two.width * two.height)
+    assert(one.alpha().count() == one.width * one.height)
+    assert(two.alpha().count() == two.width * two.height)
     assert(two.width >= one.width * 2 - 4)
     assert(two.height >= one.height * 2 - 4)
     assert(two.advance.x == one.advance.x)
@@ -87,10 +100,10 @@ test "empty text and spaces retain advance without inventing ink" {
     let empty = require_coverage(require_raster_run(instance.shape("")).rasterize())
     let spaces = require_coverage(require_raster_run(instance.shape("   ")).rasterize())
     assert(empty.is_empty())
-    assert(empty.alpha.count() == 0)
+    assert(empty.alpha().count() == 0)
     assert(empty.advance.x == 0.0)
     assert(spaces.is_empty())
-    assert(spaces.alpha.count() == 0)
+    assert(spaces.alpha().count() == 0)
     assert(spaces.advance.x > 0.0)
 }
 
@@ -107,11 +120,11 @@ test "monochrome coverage is binary while grayscale retains intermediate alpha" 
         antialiasing:Font.Antialiasing.monochrome
     )))
     var gray_has_partial = false
-    for alpha in gray.alpha {
+    for alpha in gray.alpha() {
         if alpha > 0 && alpha < 255 { gray_has_partial = true }
     }
     assert(gray_has_partial)
-    for alpha in mono.alpha {
+    for alpha in mono.alpha() {
         assert(alpha == 0 || alpha == 255)
     }
     assert(coverage_digest(gray) != coverage_digest(mono))
@@ -213,7 +226,7 @@ test "single glyph coverage matches the independent FreeType 2.14.3 oracle" {
     var sum = 0
     var weighted = 0
     var index = 0
-    for alpha in coverage.alpha {
+    for alpha in coverage.alpha() {
         sum += alpha as int
         weighted += alpha as int * (index + 1)
         index++
@@ -224,6 +237,21 @@ test "single glyph coverage matches the independent FreeType 2.14.3 oracle" {
     assert(coverage.origin.y == 12)
     assert(sum == 10200)
     assert(weighted == 737440)
+}
+
+test "expose one packed glyph bitmap without recomposing its run" {
+    var face = require_raster_face(Font.Face.decode(embed_bytes("../../Fixtures/Minimal.ttf")))
+    var instance = require_raster_instance(Font.Instance.create(face, size:17.0))
+    var run = require_raster_run(instance.shape("A"))
+    let glyph = require_glyph_coverage(instance.rasterize_glyph(run.glyphs()[0].id))
+    let coverage = require_coverage(run.rasterize())
+    assert(glyph.width == coverage.width)
+    assert(glyph.height == coverage.height)
+    assert(glyph.left == coverage.origin.x)
+    assert(glyph.top == coverage.origin.y)
+    assert(glyph.byte_count() == coverage.byte_count())
+    let glyph_alpha = glyph.alpha()
+    assert(Crypto.sha256(@glyph_alpha[0:glyph_alpha.count()]) == coverage_digest(coverage))
 }
 
 test "invalid density padding and allocation limits return typed errors" {

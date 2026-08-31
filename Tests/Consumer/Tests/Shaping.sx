@@ -22,6 +22,13 @@ func shaped(instance:Font.Instance, text:str, options:Font.ShapeOptions = Font.S
     }
 }
 
+func placed(result:Result<Font.GlyphRun, Font.Error>) Font.GlyphRun {
+    match result {
+        failure(error) => { panic(error.detail) }
+        success(run) => { return run }
+    }
+}
+
 func approximate(actual:float64, expected:float64) bool {
     return Math.abs(actual - expected) < 0.000001
 }
@@ -67,6 +74,25 @@ test "combining marks share one cluster without adding advance" {
     assert(glyphs[1].cluster_start == 0 && glyphs[1].cluster_end == 5)
     assert(glyphs[1].advance_x == 0.0)
     assert(glyphs[1].offset_x != 0.0 || glyphs[1].offset_y != 0.0)
+}
+
+test "place shaped grapheme clusters on an explicit grid" {
+    var instance = shaping_instance(shaping_face(Font.Face.default()), size:16.0)
+    var run = shaped(instance, "ae\u{301}b", Font.ShapeOptions(features:[
+        Font.Feature("liga", 0),
+        Font.Feature("clig", 0),
+        Font.Feature("calt", 0),
+        Font.Feature("kern", 0)
+    ]))
+    var grid = placed(run.place_clusters(
+        [0, 1, 4],
+        [Font.Position(x:0.0, y:0.0), Font.Position(x:10.0, y:0.0), Font.Position(x:20.0, y:0.0)],
+        Font.Position(x:30.0, y:0.0)
+    ))
+    assert(grid.metrics().advance.x == 30.0)
+    assert(grid.glyphs()[0].origin_x < 10.0)
+    assert(grid.glyphs()[-1].origin_x >= 20.0)
+    assert(grid.glyphs()[-1].cluster_start == 4)
 }
 
 test "Devanagari Greek Cyrillic and variation selectors retain scalar clusters" {

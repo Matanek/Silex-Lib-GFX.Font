@@ -4,6 +4,7 @@ use STD.File
 use STD.Math
 use STD.Path.Path as Path
 use STD.Text.UTF8
+use Interop.C
 
 public enum ErrorKind {
     file_read
@@ -18,6 +19,7 @@ public enum ErrorKind {
     invalid_text
     invalid_language
     invalid_feature_range
+    invalid_placement
     unknown_axis
     duplicate_axis
     variation_out_of_range
@@ -184,8 +186,65 @@ public struct RasterOptions {
 
 public struct PixelPosition { let x:int; let y:int }
 
+public struct GlyphRasterOptions {
+    let density:float64
+    let hinting:Hinting
+    let antialiasing:Antialiasing
+
+    init(
+        density:float64 = 1.0,
+        hinting:Hinting = Hinting.normal(),
+        antialiasing:Antialiasing = Antialiasing.grayscale()
+    ) {
+        self.density = density
+        self.hinting = hinting
+        self.antialiasing = antialiasing
+    }
+}
+
+public struct GlyphCoverage {
+    private let packed_alpha_value:str
+    let width:int
+    let height:int
+    let stride:int
+    let left:int
+    let top:int
+    let density:float64
+
+    module init(
+        packed_alpha:str,
+        width:int,
+        height:int,
+        stride:int,
+        left:int,
+        top:int,
+        density:float64
+    ) {
+        self.packed_alpha_value = packed_alpha
+        self.width = width
+        self.height = height
+        self.stride = stride
+        self.left = left
+        self.top = top
+        self.density = density
+    }
+
+    func is_empty() bool { return self.width == 0 || self.height == 0 }
+    func byte_count() int { return self.stride * self.height }
+    func packed_alpha() str { return self.packed_alpha_value }
+    func alpha() uint8[] {
+        var result:uint8[] = []
+        var index = 0
+        while index < self.byte_count() {
+            result.append(C.byte_at(self.packed_alpha_value, index as C.Size))
+            index++
+        }
+        return result
+    }
+}
+
 public struct Coverage {
-    let alpha:uint8[]
+    private let packed_alpha_value:str
     let width:int
     let height:int
     let stride:int
@@ -195,8 +254,40 @@ public struct Coverage {
     let advance:Position
     let density:float64
 
+    module init(
+        packed_alpha:str,
+        width:int,
+        height:int,
+        stride:int,
+        origin:PixelPosition,
+        baseline:int,
+        bounds:Bounds,
+        advance:Position,
+        density:float64
+    ) {
+        self.packed_alpha_value = packed_alpha
+        self.width = width
+        self.height = height
+        self.stride = stride
+        self.origin = origin
+        self.baseline = baseline
+        self.bounds = bounds
+        self.advance = advance
+        self.density = density
+    }
+
     func is_empty() bool { return self.width == 0 || self.height == 0 }
-    func byte_count() int { return self.alpha.count() }
+    func byte_count() int { return self.stride * self.height }
+    func packed_alpha() str { return self.packed_alpha_value }
+    func alpha() uint8[] {
+        var result:uint8[] = []
+        var index = 0
+        while index < self.byte_count() {
+            result.append(C.byte_at(self.packed_alpha_value, index as C.Size))
+            index++
+        }
+        return result
+    }
 }
 
 public enum Direction {
@@ -274,6 +365,7 @@ public struct RunMetrics {
 
 struct GlyphRunData {
     let cache_key:str
+    let cache_coverage:bool
     let text:str
     let direction:Direction
     let script:str
@@ -288,9 +380,11 @@ struct GlyphRunData {
         script:str,
         language:str,
         glyphs:Glyph[],
-        metrics:RunMetrics
+        metrics:RunMetrics,
+        cache_coverage:bool = true
     ) {
         self.cache_key = cache_key
+        self.cache_coverage = cache_coverage
         self.text = text
         self.direction = direction
         self.script = script
@@ -657,6 +751,47 @@ public class Instance {
         return null
     }
 
+    func rasterize_glyph(
+        glyph_id:uint32,
+        options:GlyphRasterOptions = GlyphRasterOptions()
+    ) Result<GlyphCoverage?, Error> {
+        let physical_size_value = self.logical_size * options.density * 64.0
+        if options.density <= 0.0 || !Math.is_finite(options.density) ||
+            !Math.is_finite(physical_size_value) ||
+            physical_size_value < 1.0 || physical_size_value > 1048576.0
+        {
+            return Result<GlyphCoverage?, Error>.failure(Error(
+                kind:ErrorKind.invalid_density,
+                detail:"font glyph raster density must fit the supported 1/64-pixel range"
+            ))
+        }
+        match Native.raster_glyph(
+            self.instance_handle,
+            glyph_id,
+            Math.round(physical_size_value) as int,
+            hinting_code(options.hinting),
+            antialiasing_code(options.antialiasing)
+        ) {
+            failure(error) => {
+                return Result<GlyphCoverage?, Error>.failure(public_error(error))
+            }
+            success(bitmap) => {
+                if value = bitmap {
+                    return Result<GlyphCoverage?, Error>.success(GlyphCoverage(
+                        packed_alpha:value.pixels,
+                        width:value.width,
+                        height:value.height,
+                        stride:value.stride,
+                        left:value.left,
+                        top:value.top,
+                        density:options.density
+                    ))
+                }
+                return Result<GlyphCoverage?, Error>.success(null)
+            }
+        }
+    }
+
     func outline(glyph_id:uint32) Result<GlyphOutline?, Error> {
         if cached = self.outline_cache.find(glyph_id) {
             return Result<GlyphOutline?, Error>.success(cached.outline)
@@ -739,6 +874,117 @@ public class GlyphRun {
         return count
     }
 
+    func place_clusters(
+        starts:int[],
+        origins:Position[],
+        advance:Position
+    ) Result<GlyphRun, Error> {
+        if starts.count() != origins.count() {
+            return Result<GlyphRun, Error>.failure(Error(
+                kind:ErrorKind.invalid_placement,
+                detail:"font cluster placement requires one origin per cluster start"
+            ))
+        }
+        let bytes = UTF8.bytes(self.data.text)
+        if bytes.count() > 0 && (starts.count() == 0 || starts[0] != 0) {
+            return Result<GlyphRun, Error>.failure(Error(
+                kind:ErrorKind.invalid_placement,
+                detail:"font cluster placement must begin at byte zero"
+            ))
+        }
+        var start_index = 0
+        while start_index < starts.count() {
+            if starts[start_index] < 0 || starts[start_index] >= bytes.count() ||
+                !scalar_boundary(bytes, starts[start_index]) ||
+                (start_index > 0 && starts[start_index] <= starts[start_index - 1])
+            {
+                return Result<GlyphRun, Error>.failure(Error(
+                    kind:ErrorKind.invalid_placement,
+                    detail:"font cluster placement starts must be ordered UTF-8 boundaries"
+                ))
+            }
+            start_index++
+        }
+
+        var base_x:float64[] = []
+        var base_y:float64[] = []
+        var base_set:bool[] = []
+        for start in starts {
+            base_x.append(0.0)
+            base_y.append(0.0)
+            base_set.append(false)
+        }
+        for glyph in self.data.glyphs {
+            let cluster_index = placement_cluster_index(starts, glyph.cluster_start)
+            if cluster_index >= 0 && !base_set[cluster_index] {
+                base_x[cluster_index] = glyph.origin_x
+                base_y[cluster_index] = glyph.origin_y
+                base_set[cluster_index] = true
+            }
+        }
+
+        var glyphs:Glyph[] = []
+        var ink:Bounds? = null
+        for glyph in self.data.glyphs {
+            let cluster_index = placement_cluster_index(starts, glyph.cluster_start)
+            if cluster_index < 0 {
+                return Result<GlyphRun, Error>.failure(Error(
+                    kind:ErrorKind.invalid_placement,
+                    detail:"font glyph cluster has no requested placement"
+                ))
+            }
+            let shift_x = origins[cluster_index].x - base_x[cluster_index]
+            let shift_y = origins[cluster_index].y - base_y[cluster_index]
+            var shifted_ink:Bounds? = null
+            if bounds = glyph.ink {
+                let shifted = Bounds(
+                    x:bounds.x + shift_x,
+                    y:bounds.y + shift_y,
+                    width:bounds.width,
+                    height:bounds.height
+                )
+                shifted_ink = shifted
+                ink = combined_bounds(ink, shifted)
+            }
+            glyphs.append(Glyph(
+                id:glyph.id,
+                cluster_start:glyph.cluster_start,
+                cluster_end:glyph.cluster_end,
+                advance_x:glyph.advance_x,
+                advance_y:glyph.advance_y,
+                offset_x:glyph.offset_x,
+                offset_y:glyph.offset_y,
+                origin_x:glyph.origin_x + shift_x,
+                origin_y:glyph.origin_y + shift_y,
+                ink:shifted_ink
+            ))
+        }
+        let line = self.instance_value.metrics()
+        return Result<GlyphRun, Error>.success(GlyphRun(self.instance_value, GlyphRunData(
+            cache_key:self.data.cache_key + "|placed",
+            cache_coverage:false,
+            text:self.data.text,
+            direction:self.data.direction,
+            script:self.data.script,
+            language:self.data.language,
+            glyphs:glyphs,
+            metrics:RunMetrics(
+                advance:advance,
+                logical_bounds:Bounds(
+                    x:Math.min(0.0, advance.x),
+                    y:line.descender,
+                    width:Math.abs(advance.x),
+                    height:line.line_height
+                ),
+                ink_bounds:ink,
+                baseline:0.0,
+                ascender:line.ascender,
+                descender:line.descender,
+                line_height:line.line_height
+            )
+        )))
+    }
+
     func outlines() Result<PlacedOutline[], Error> {
         var result:PlacedOutline[] = []
         let size = self.instance_value.size()
@@ -803,14 +1049,16 @@ func rasterize_run(instance:Instance, data:GlyphRunData, options:RasterOptions) 
     let hinting = hinting_code(options.hinting)
     let antialiasing = antialiasing_code(options.antialiasing)
     let key = data.cache_key + "|density=$(options.density)|hint=$(hinting)|aa=$(antialiasing)|pad=$(options.padding)"
-    if cached = instance.cached_coverage(key) {
-        if cached.byte_count() > options.maximum_pixels {
-            return Result<Coverage, Error>.failure(Error(
-                kind:ErrorKind.coverage_too_large,
-                detail:"cached font coverage exceeds maximum_pixels"
-            ))
+    if data.cache_coverage {
+        if cached = instance.cached_coverage(key) {
+            if cached.byte_count() > options.maximum_pixels {
+                return Result<Coverage, Error>.failure(Error(
+                    kind:ErrorKind.coverage_too_large,
+                    detail:"cached font coverage exceeds maximum_pixels"
+                ))
+            }
+            return Result<Coverage, Error>.success(cached)
         }
-        return Result<Coverage, Error>.success(cached)
     }
 
     var glyphs:Native.RasterGlyph[] = []
@@ -867,7 +1115,7 @@ func rasterize_run(instance:Instance, data:GlyphRunData, options:RasterOptions) 
                 )
             }
             let coverage = Coverage(
-                alpha:native.pixels,
+                packed_alpha:native.pixels,
                 width:native.width,
                 height:native.height,
                 stride:native.stride,
@@ -877,7 +1125,7 @@ func rasterize_run(instance:Instance, data:GlyphRunData, options:RasterOptions) 
                 advance:data.metrics.advance,
                 density:options.density
             )
-            instance.cache_coverage(key, coverage)
+            if data.cache_coverage { instance.cache_coverage(key, coverage) }
             return Result<Coverage, Error>.success(coverage)
         }
     }
@@ -1115,6 +1363,17 @@ func scalar_boundary(bytes:uint8[], offset:int) bool {
     if offset == bytes.count() { return true }
     if offset < 0 || offset > bytes.count() { return false }
     return bytes[offset] < 128 || bytes[offset] > 191
+}
+
+func placement_cluster_index(starts:@int[], byte_offset:int) int {
+    var first = 0
+    var last = starts.count()
+    while first < last {
+        let middle = first + (last - first) / 2
+        if starts[middle] <= byte_offset { first = middle + 1 }
+        else { last = middle }
+    }
+    return first - 1
 }
 
 func ascii_letters(bytes:uint8[]) bool {

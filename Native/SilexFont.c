@@ -113,7 +113,7 @@ typedef struct FontBitmap {
 } FontBitmap;
 
 typedef struct FontCoverageGlyph {
-    FontBitmap *bitmap;
+    FontBitmapEntry *entry;
     int32_t origin_x;
     int32_t origin_y;
 } FontCoverageGlyph;
@@ -1329,19 +1329,48 @@ int32_t silex_font_coverage_add_glyph(
         fail(SILEX_FONT_INVALID_INPUT, "cannot append a glyph to a finished font coverage");
         return 0;
     }
-    FontBitmap *bitmap = silex_font_bitmap_create(
-        coverage->instance,
-        glyph_id,
-        coverage->size_26_6,
-        coverage->hinting,
-        coverage->antialiasing
-    );
-    if (bitmap == NULL) return 0;
+    FontInstance *instance = coverage->instance;
+    FontFace *face = instance->face;
+    FontBitmapEntry *entry = NULL;
+    lock_state();
+    for (uint32_t index = 0; index < face->bitmap_count; ++index) {
+        FontBitmapEntry *candidate = face->bitmaps[index];
+        if (same_bitmap_key(
+            candidate,
+            instance,
+            glyph_id,
+            coverage->size_26_6,
+            coverage->hinting,
+            coverage->antialiasing
+        )) {
+            entry = candidate;
+            entry->last_used = ++face->bitmap_clock;
+            ++entry->references;
+            break;
+        }
+    }
+    unlock_state();
+    if (entry == NULL) {
+        FontBitmap *bitmap = silex_font_bitmap_create(
+            instance,
+            glyph_id,
+            coverage->size_26_6,
+            coverage->hinting,
+            coverage->antialiasing
+        );
+        if (bitmap == NULL) return 0;
+        entry = bitmap->entry;
+        bitmap->magic = 0;
+        free(bitmap);
+        lock_state();
+        if (state.bitmaps > 0) --state.bitmaps;
+        unlock_state();
+    }
     if (coverage->glyph_count == coverage->glyph_capacity) {
         uint32_t next_capacity = coverage->glyph_capacity == 0 ? 64 : coverage->glyph_capacity * 2;
         if (next_capacity < coverage->glyph_capacity ||
             (size_t)next_capacity > SIZE_MAX / sizeof(*coverage->glyphs)) {
-            silex_font_bitmap_destroy(bitmap);
+            lock_state(); if (entry->references > 0) --entry->references; evict_bitmap_cache(face); unlock_state();
             fail(SILEX_FONT_OUT_OF_MEMORY, "font coverage glyph capacity overflow");
             return 0;
         }
@@ -1350,7 +1379,7 @@ int32_t silex_font_coverage_add_glyph(
             (size_t)next_capacity * sizeof(*next)
         );
         if (next == NULL) {
-            silex_font_bitmap_destroy(bitmap);
+            lock_state(); if (entry->references > 0) --entry->references; evict_bitmap_cache(face); unlock_state();
             fail(SILEX_FONT_OUT_OF_MEMORY, "could not grow the font coverage glyph list");
             return 0;
         }
@@ -1358,7 +1387,7 @@ int32_t silex_font_coverage_add_glyph(
         coverage->glyph_capacity = next_capacity;
     }
     FontCoverageGlyph *glyph = &coverage->glyphs[coverage->glyph_count++];
-    glyph->bitmap = bitmap;
+    glyph->entry = entry;
     glyph->origin_x = origin_x;
     glyph->origin_y = origin_y;
     return 1;
@@ -1381,9 +1410,8 @@ int32_t silex_font_coverage_finish(void *raw, int32_t padding, size_t maximum_pi
     int64_t maximum_y = 0;
     for (uint32_t index = 0; index < coverage->glyph_count; ++index) {
         FontCoverageGlyph *glyph = &coverage->glyphs[index];
-        const FontBitmap *bitmap = checked_bitmap(glyph->bitmap);
-        if (bitmap == NULL) return 0;
-        const FontBitmapEntry *entry = bitmap->entry;
+        const FontBitmapEntry *entry = glyph->entry;
+        if (entry == NULL) return 0;
         if (entry->width == 0 || entry->height == 0) continue;
         int64_t left = (int64_t)glyph->origin_x + entry->left;
         int64_t top = (int64_t)glyph->origin_y + entry->top;
@@ -1434,24 +1462,28 @@ int32_t silex_font_coverage_finish(void *raw, int32_t padding, size_t maximum_pi
 
     for (uint32_t index = 0; index < coverage->glyph_count; ++index) {
         FontCoverageGlyph *glyph = &coverage->glyphs[index];
-        const FontBitmapEntry *entry = glyph->bitmap->entry;
+        const FontBitmapEntry *entry = glyph->entry;
         if (entry->width == 0 || entry->height == 0) continue;
         int64_t left = (int64_t)glyph->origin_x + entry->left;
         int64_t top = (int64_t)glyph->origin_y + entry->top;
         size_t destination_x = (size_t)(left - padded_minimum_x);
         size_t destination_y = (size_t)(padded_maximum_y - top);
         for (int32_t row = 0; row < entry->height; ++row) {
+            const uint8_t *source = entry->pixels + (size_t)row * (size_t)entry->stride;
+            uint8_t *destination = coverage->pixels +
+                (destination_y + (size_t)row) * (size_t)coverage->stride + destination_x;
             for (int32_t column = 0; column < entry->width; ++column) {
-                size_t source_index = (size_t)row * (size_t)entry->stride + (size_t)column;
-                size_t destination_index =
-                    (destination_y + (size_t)row) * (size_t)coverage->stride +
-                    destination_x + (size_t)column;
-                uint32_t source_alpha = entry->pixels[source_index];
-                uint32_t destination_alpha = coverage->pixels[destination_index];
-                coverage->pixels[destination_index] = (uint8_t)(
-                    source_alpha +
-                    (destination_alpha * (255u - source_alpha) + 127u) / 255u
-                );
+                uint32_t source_alpha = source[column];
+                if (source_alpha == 0) continue;
+                uint32_t destination_alpha = destination[column];
+                if (destination_alpha == 0 || source_alpha == 255) {
+                    destination[column] = (uint8_t)source_alpha;
+                } else if (destination_alpha != 255) {
+                    destination[column] = (uint8_t)(
+                        source_alpha +
+                        (destination_alpha * (255u - source_alpha) + 127u) / 255u
+                    );
+                }
             }
         }
     }
@@ -1467,9 +1499,13 @@ void silex_font_coverage_destroy(void *raw) {
         return;
     }
     coverage->magic = 0;
+    lock_state();
     for (uint32_t index = 0; index < coverage->glyph_count; ++index) {
-        silex_font_bitmap_destroy(coverage->glyphs[index].bitmap);
+        FontBitmapEntry *entry = coverage->glyphs[index].entry;
+        if (entry != NULL && entry->references > 0) --entry->references;
     }
+    evict_bitmap_cache(coverage->instance->face);
+    unlock_state();
     free(coverage->glyphs);
     free(coverage->pixels);
     free(coverage);

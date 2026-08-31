@@ -1,6 +1,7 @@
 use GFX.Font
 use GFX.Font.Native
 use STD.Threading
+use Interop.C
 
 func exercise_native_lifetimes() {
     let bytes = embed_bytes("Fixtures/Minimal.ttf")
@@ -119,12 +120,16 @@ test "run coverage composes the glyph IDs produced by shaping" {
                         success(bitmap) => {
                             if value = bitmap {
                                 var glyph_sum = 0
-                                for alpha in value.pixels { glyph_sum += alpha as int }
+                                var pixel = 0
+                                while pixel < value.stride * value.height {
+                                    glyph_sum += C.byte_at(value.pixels, pixel as C.Size) as int
+                                    pixel++
+                                }
                                 match pair.rasterize() {
                                     failure(error) => { panic(error.detail) }
                                     success(coverage) => {
                                         var run_sum = 0
-                                        for alpha in coverage.alpha { run_sum += alpha as int }
+                                        for alpha in coverage.alpha() { run_sum += alpha as int }
                                         assert(run_sum == glyph_sum * 2)
                                     }
                                 }

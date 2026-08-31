@@ -3,7 +3,7 @@
   "target": "macos-arm64",
   "linkage": "static",
   "artifacts": {
-    "SilexFont": "8b6d52ebcddd9289044581a5c0b6a9021934a49bdb3ef77eaad967e5ed4861ba",
+    "SilexFont": "79a542447fed607bb0d301852e3cc768b11d4ad986d7f3430722e294a82e87a8",
     "FreeType": "9fb15f939f279cd5171039b158f353bace9ec56f3ef09bf968db1f2ec4afe035",
     "HarfBuzz": "38b0571bdd0ca75b02813a4601bb5201533a995981ceb709ea35b6a4e1d0b39a"
   },

@@ -39,7 +39,7 @@ package struct OutlineData {
     let y_advance:int
 }
 package struct GlyphBitmap {
-    let pixels:uint8[]
+    let pixels:str
     let width:int
     let height:int
     let stride:int
@@ -48,7 +48,7 @@ package struct GlyphBitmap {
 }
 package struct RasterGlyph { let id:uint32; let origin_x:int; let origin_y:int }
 package struct RunCoverage {
-    let pixels:uint8[]
+    let pixels:str
     let width:int
     let height:int
     let stride:int
@@ -233,11 +233,9 @@ package func raster_glyph(
     let height = signed32(bitmap_height(C.pointer_bits(raw)))
     let stride = signed32(bitmap_stride(C.pointer_bits(raw)))
     let byte_count = stride * height
-    var pixels:uint8[] = []
+    var pixels = ""
     if byte_count > 0 {
-        var storage:uint8[] = []
-        while storage.count() < byte_count { storage.append(0 as uint8) }
-        var packed = C.string(@storage[0:storage.count()])
+        var packed = packed_storage(byte_count)
         if bitmap_copy_pixels(
             C.pointer_bits(raw), C.mutable_string_pointer(packed), byte_count as C.Size
         ) == 0 {
@@ -245,11 +243,7 @@ package func raster_glyph(
             bitmap_destroy(C.pointer_bits(raw))
             return Result<GlyphBitmap?, Error>.failure(error)
         }
-        var index = 0
-        while index < byte_count {
-            pixels.append(C.byte_at(packed, index as C.Size))
-            index++
-        }
+        pixels = move packed
     }
     let result = GlyphBitmap(
         pixels:pixels,
@@ -310,11 +304,9 @@ package func raster_coverage(
     let height = signed32(coverage_height(C.pointer_bits(raw)))
     let stride = signed32(coverage_stride(C.pointer_bits(raw)))
     let byte_count = stride * height
-    var pixels:uint8[] = []
+    var pixels = ""
     if byte_count > 0 {
-        var storage:uint8[] = []
-        while storage.count() < byte_count { storage.append(0 as uint8) }
-        var packed = C.string(@storage[0:storage.count()])
+        var packed = packed_storage(byte_count)
         if coverage_copy_pixels(
             C.pointer_bits(raw),
             C.mutable_string_pointer(packed),
@@ -324,11 +316,7 @@ package func raster_coverage(
             coverage_destroy(C.pointer_bits(raw))
             return Result<RunCoverage, Error>.failure(error)
         }
-        var index = 0
-        while index < byte_count {
-            pixels.append(C.byte_at(packed, index as C.Size))
-            index++
-        }
+        pixels = move packed
     }
     let result = RunCoverage(
         pixels:pixels,
@@ -340,6 +328,14 @@ package func raster_coverage(
     )
     coverage_destroy(C.pointer_bits(raw))
     return Result<RunCoverage, Error>.success(result)
+}
+
+func packed_storage(minimum_byte_count:int) str {
+    var storage = "\0"
+    while C.byte_count(storage) < minimum_byte_count as uint {
+        storage = storage + storage
+    }
+    return storage
 }
 
 package func shape(
