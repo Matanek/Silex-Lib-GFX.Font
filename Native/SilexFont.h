@@ -8,7 +8,7 @@
 extern "C" {
 #endif
 
-#define SILEX_FONT_ABI_VERSION 4u
+#define SILEX_FONT_ABI_VERSION 5u
 
 enum SilexFontStatus {
     SILEX_FONT_OK = 0,
@@ -49,6 +49,17 @@ enum SilexFontOutlineCommand {
     SILEX_FONT_OUTLINE_CONIC_TO = 3,
     SILEX_FONT_OUTLINE_CUBIC_TO = 4,
     SILEX_FONT_OUTLINE_CLOSE = 5
+};
+
+enum SilexFontHinting {
+    SILEX_FONT_HINTING_NONE = 0,
+    SILEX_FONT_HINTING_LIGHT = 1,
+    SILEX_FONT_HINTING_NORMAL = 2
+};
+
+enum SilexFontAntialiasing {
+    SILEX_FONT_ANTIALIASING_GRAYSCALE = 0,
+    SILEX_FONT_ANTIALIASING_MONOCHROME = 1
 };
 
 uint32_t silex_font_abi_version(void);
@@ -122,6 +133,45 @@ int32_t silex_font_outline_y_advance(const void *outline);
 uint32_t silex_font_face_outline_decomposition_count(const void *face);
 void silex_font_test_fail_outline_after(uint32_t step_count);
 
+void *silex_font_bitmap_create(
+    const void *instance,
+    uint32_t glyph_id,
+    int32_t size_26_6,
+    int32_t hinting,
+    int32_t antialiasing
+);
+void silex_font_bitmap_destroy(void *bitmap);
+int32_t silex_font_bitmap_width(const void *bitmap);
+int32_t silex_font_bitmap_height(const void *bitmap);
+int32_t silex_font_bitmap_stride(const void *bitmap);
+int32_t silex_font_bitmap_left(const void *bitmap);
+int32_t silex_font_bitmap_top(const void *bitmap);
+int32_t silex_font_bitmap_copy_pixels(const void *bitmap, uint8_t *output, size_t byte_count);
+uint32_t silex_font_face_bitmap_rasterization_count(const void *face);
+uint32_t silex_font_face_bitmap_cache_entry_count(const void *face);
+size_t silex_font_face_bitmap_cache_byte_count(const void *face);
+
+void *silex_font_coverage_create(
+    const void *instance,
+    int32_t size_26_6,
+    int32_t hinting,
+    int32_t antialiasing
+);
+int32_t silex_font_coverage_add_glyph(
+    void *coverage,
+    uint32_t glyph_id,
+    int32_t origin_x,
+    int32_t origin_y
+);
+int32_t silex_font_coverage_finish(void *coverage, int32_t padding, size_t maximum_pixels);
+void silex_font_coverage_destroy(void *coverage);
+int32_t silex_font_coverage_width(const void *coverage);
+int32_t silex_font_coverage_height(const void *coverage);
+int32_t silex_font_coverage_stride(const void *coverage);
+int32_t silex_font_coverage_origin_x(const void *coverage);
+int32_t silex_font_coverage_origin_y(const void *coverage);
+int32_t silex_font_coverage_copy_pixels(const void *coverage, uint8_t *output, size_t byte_count);
+
 void *silex_font_shape_create(
     const void *instance,
     const uint8_t *utf8,
@@ -168,6 +218,8 @@ uint32_t silex_font_live_library_count(void);
 uint32_t silex_font_live_face_count(void);
 uint32_t silex_font_live_instance_count(void);
 uint32_t silex_font_live_outline_count(void);
+uint32_t silex_font_live_bitmap_count(void);
+uint32_t silex_font_live_coverage_count(void);
 
 #ifdef __cplusplus
 }

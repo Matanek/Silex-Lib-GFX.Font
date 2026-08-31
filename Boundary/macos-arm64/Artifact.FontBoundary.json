@@ -1,9 +1,9 @@
 {
-  "abi": "silex-font-4",
+  "abi": "silex-font-5",
   "target": "macos-arm64",
   "linkage": "static",
   "artifacts": {
-    "SilexFont": "0df90287283051a8bf94d221234102aedbfcca57c7d79c83d3e68f6e134b7792",
+    "SilexFont": "8b6d52ebcddd9289044581a5c0b6a9021934a49bdb3ef77eaad967e5ed4861ba",
     "FreeType": "9fb15f939f279cd5171039b158f353bace9ec56f3ef09bf968db1f2ec4afe035",
     "HarfBuzz": "38b0571bdd0ca75b02813a4601bb5201533a995981ceb709ea35b6a4e1d0b39a"
   },

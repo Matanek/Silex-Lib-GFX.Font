@@ -1,0 +1,52 @@
+use GFX.Font
+use STD.Crypto
+
+func require_face(result:Result<Font.Face, Font.Error>) Font.Face {
+    match result {
+        failure(error) => { panic(error.detail) }
+        success(face) => { return face }
+    }
+}
+
+func require_instance(result:Result<Font.Instance, Font.Error>) Font.Instance {
+    match result {
+        failure(error) => { panic(error.detail) }
+        success(instance) => { return instance }
+    }
+}
+
+func require_run(result:Result<Font.GlyphRun, Font.Error>) Font.GlyphRun {
+    match result {
+        failure(error) => { panic(error.detail) }
+        success(run) => { return run }
+    }
+}
+
+func require_coverage(result:Result<Font.Coverage, Font.Error>) Font.Coverage {
+    match result {
+        failure(error) => { panic(error.detail) }
+        success(coverage) => { return coverage }
+    }
+}
+
+func report(label:str, coverage:Font.Coverage) {
+    let digest = Crypto.sha256(@coverage.alpha[0:coverage.alpha.count()])
+    print("$(label) $(coverage.width)x$(coverage.height) origin=$(coverage.origin.x),$(coverage.origin.y) baseline=$(coverage.baseline) sha256=$(digest)")
+}
+
+func main() {
+    var latin_face = require_face(Font.Face.decode(embed_bytes("../Tests/Fixtures/Minimal.ttf")))
+    var latin = require_instance(Font.Instance.create(latin_face, size:17.0))
+    report("latin", require_coverage(require_run(latin.shape("Ag office")).rasterize()))
+    report("mark", require_coverage(require_run(latin.shape("e\u{301}")).rasterize()))
+    report("negative", require_coverage(require_run(latin.shape("j")).rasterize()))
+    report("below-baseline", require_coverage(require_run(latin.shape("_")).rasterize()))
+
+    var arabic_face = require_face(Font.Face.decode(embed_bytes("../Tests/Fixtures/NotoSansArabic-Test.ttf")))
+    var arabic = require_instance(Font.Instance.create(arabic_face, size:20.0))
+    report("rtl", require_coverage(require_run(arabic.shape("سلام", Font.ShapeOptions(
+        direction:Font.Direction.right_to_left,
+        script:"Arab",
+        language:"ar"
+    ))).rasterize()))
+}

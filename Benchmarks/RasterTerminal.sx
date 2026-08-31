@@ -1,0 +1,182 @@
+use GFX.Font
+use STD.Math
+use STD.Text as Text
+use STD.Time.Clock
+
+struct Measurements {
+    let minimum_ms:float
+    let maximum_ms:float
+    let mean_ms:float
+    let deviation_ms:float
+}
+
+func require_face(result:Result<Font.Face, Font.Error>) Font.Face {
+    match result {
+        failure(error) => { panic(error.detail) }
+        success(face) => { return face }
+    }
+}
+
+func require_instance(result:Result<Font.Instance, Font.Error>) Font.Instance {
+    match result {
+        failure(error) => { panic(error.detail) }
+        success(instance) => { return instance }
+    }
+}
+
+func require_run(result:Result<Font.GlyphRun, Font.Error>) Font.GlyphRun {
+    match result {
+        failure(error) => { panic(error.detail) }
+        success(run) => { return run }
+    }
+}
+
+func require_coverage(result:Result<Font.Coverage, Font.Error>) Font.Coverage {
+    match result {
+        failure(error) => { panic(error.detail) }
+        success(coverage) => { return coverage }
+    }
+}
+
+func terminal_line(columns:int, row:int, frame:int) str {
+    let ascii = " INFO src/main.sx:42 │ let glyph = run.glyphs()[index] 0123456789 abcdef "
+    let unicode = " WARN café e\u{301} déjà-vu Ω Ж λ → baseline + marks + ligature office "
+    var line = "[$(frame):$(row)] "
+    var seed = ascii
+    if row % 5 == 0 { seed = unicode }
+    while line.count() < columns { line = line + seed }
+    return Text.slice(line, 0, columns)
+}
+
+func terminal_screen(columns:int, rows:int, frame:int) str[] {
+    var lines:str[] = []
+    var row = 0
+    while row < rows {
+        lines.append(terminal_line(columns, row, frame))
+        row++
+    }
+    return lines
+}
+
+func render(instance:Font.Instance, lines:str[]) int {
+    var signature = 0
+    for line in lines {
+        var run = require_run(instance.shape(line))
+        let coverage = require_coverage(run.rasterize())
+        signature += coverage.byte_count() + coverage.width + coverage.height
+        signature += Math.round(coverage.advance.x) as int
+    }
+    return signature
+}
+
+func summarize(samples:float[]) Measurements {
+    var minimum = samples[0]
+    var maximum = samples[0]
+    var total = 0.0
+    for sample in samples {
+        minimum = Math.min(minimum, sample)
+        maximum = Math.max(maximum, sample)
+        total += sample
+    }
+    let mean = total / samples.count() as float
+    var squared = 0.0
+    for sample in samples {
+        let difference = sample - mean
+        squared += difference * difference
+    }
+    return Measurements(
+        minimum_ms:minimum,
+        maximum_ms:maximum,
+        mean_ms:mean,
+        deviation_ms:Math.sqrt(squared / samples.count() as float)
+    )
+}
+
+func report(case_name:str, phase:str, samples:float[], signature:int) {
+    let result = summarize(samples)
+    var raw = ""
+    var index = 0
+    for sample in samples {
+        if index > 0 { raw = raw + "," }
+        raw = raw + "$(sample)"
+        index++
+    }
+    print(
+        "SILEX_FONT_RASTER case=$(case_name) phase=$(phase) repetitions=$(samples.count()) " +
+        "min_ms=$(result.minimum_ms) mean_ms=$(result.mean_ms) " +
+        "max_ms=$(result.maximum_ms) deviation_ms=$(result.deviation_ms) " +
+        "samples_ms=$(raw) signature=$(signature)"
+    )
+}
+
+func measure_case(columns:int, rows:int, repetitions:int) {
+    let case_name = "$(columns)x$(rows)"
+    let stable = terminal_screen(columns, rows, 0)
+    var cold_instances:Font.Instance[] = []
+    var repetition = 0
+    while repetition < repetitions {
+        var face = require_face(Font.Face.monospace())
+        cold_instances.append(require_instance(Font.Instance.create(face, size:14.0)))
+        repetition++
+    }
+
+    var cold:float[] = []
+    var signature = 0
+    repetition = 0
+    while repetition < repetitions {
+        var clock = Clock()
+        clock.tick()
+        signature += render(cold_instances[repetition], stable)
+        cold.append(clock.tick() * 1000.0)
+        repetition++
+    }
+    report(case_name, "cold_shape_raster_compose", cold, signature)
+
+    var warm_face = require_face(Font.Face.monospace())
+    var warm_instance = require_instance(Font.Instance.create(warm_face, size:14.0))
+    signature += render(warm_instance, stable)
+    var warm:float[] = []
+    repetition = 0
+    while repetition < repetitions {
+        var clock = Clock()
+        clock.tick()
+        signature += render(warm_instance, stable)
+        warm.append(clock.tick() * 1000.0)
+        repetition++
+    }
+    report(case_name, "warm_run_cache", warm, signature)
+
+    var recomposition:float[] = []
+    repetition = 0
+    while repetition < repetitions {
+        let changed = terminal_screen(columns, rows, repetition + 1)
+        var clock = Clock()
+        clock.tick()
+        signature += render(warm_instance, changed)
+        recomposition.append(clock.tick() * 1000.0)
+        repetition++
+    }
+    report(case_name, "warm_glyph_recomposition", recomposition, signature)
+
+    var burst:float[] = []
+    repetition = 0
+    while repetition < repetitions {
+        var updates:str[] = []
+        var update = 0
+        while update < 10 {
+            updates.append(terminal_line(columns, update, 100 + repetition * 10 + update))
+            update++
+        }
+        var clock = Clock()
+        clock.tick()
+        signature += render(warm_instance, updates)
+        burst.append(clock.tick() * 1000.0)
+        repetition++
+    }
+    report(case_name, "ten_row_update_burst", burst, signature)
+}
+
+func main() {
+    measure_case(80, 24, 5)
+    measure_case(200, 60, 5)
+}

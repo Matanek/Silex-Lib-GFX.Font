@@ -27,6 +27,9 @@
 #define INSTANCE_MAGIC UINT32_C(0x5346494e)
 #define SHAPE_MAGIC UINT32_C(0x53465348)
 #define OUTLINE_MAGIC UINT32_C(0x53464f4c)
+#define BITMAP_MAGIC UINT32_C(0x5346424d)
+#define COVERAGE_MAGIC UINT32_C(0x53464356)
+#define BITMAP_CACHE_LIMIT ((size_t)16 * 1024 * 1024)
 
 typedef struct FontOutlineStep {
     int32_t kind;
@@ -47,6 +50,25 @@ typedef struct FontOutlineEntry {
     int32_t y_advance;
 } FontOutlineEntry;
 
+typedef struct FontBitmapEntry {
+    uint32_t glyph_id;
+    hb_variation_t *variations;
+    unsigned int variation_count;
+    int32_t size_26_6;
+    int32_t hinting;
+    int32_t antialiasing;
+    int32_t width;
+    int32_t height;
+    int32_t stride;
+    int32_t left;
+    int32_t top;
+    uint8_t *pixels;
+    size_t byte_count;
+    size_t cache_byte_count;
+    uint64_t last_used;
+    uint32_t references;
+} FontBitmapEntry;
+
 typedef struct FontLibrary { uint32_t magic; } FontLibrary;
 
 typedef struct FontFace {
@@ -62,6 +84,12 @@ typedef struct FontFace {
     uint32_t outline_count;
     uint32_t outline_capacity;
     uint32_t outline_decomposition_count;
+    FontBitmapEntry **bitmaps;
+    uint32_t bitmap_count;
+    uint32_t bitmap_capacity;
+    size_t bitmap_bytes;
+    uint64_t bitmap_clock;
+    uint32_t bitmap_rasterization_count;
 } FontFace;
 
 typedef struct FontInstance {
@@ -77,6 +105,37 @@ typedef struct FontOutline {
     uint32_t magic;
     const FontOutlineEntry *entry;
 } FontOutline;
+
+typedef struct FontBitmap {
+    uint32_t magic;
+    FontFace *face;
+    FontBitmapEntry *entry;
+} FontBitmap;
+
+typedef struct FontCoverageGlyph {
+    FontBitmap *bitmap;
+    int32_t origin_x;
+    int32_t origin_y;
+} FontCoverageGlyph;
+
+typedef struct FontCoverage {
+    uint32_t magic;
+    FontInstance *instance;
+    int32_t size_26_6;
+    int32_t hinting;
+    int32_t antialiasing;
+    FontCoverageGlyph *glyphs;
+    uint32_t glyph_count;
+    uint32_t glyph_capacity;
+    uint8_t *pixels;
+    size_t byte_count;
+    int32_t width;
+    int32_t height;
+    int32_t stride;
+    int32_t origin_x;
+    int32_t origin_y;
+    int finished;
+} FontCoverage;
 
 typedef struct FontGlyphRecord {
     uint32_t id;
@@ -121,6 +180,8 @@ typedef struct FontState {
     uint32_t faces;
     uint32_t instances;
     uint32_t outlines;
+    uint32_t bitmaps;
+    uint32_t coverages;
 } FontState;
 
 static FontState state;
@@ -236,6 +297,78 @@ static void free_outline_entry(FontOutlineEntry *entry) {
     free(entry->variations);
     free(entry->steps);
     free(entry);
+}
+
+static const FontBitmap *checked_bitmap(const void *raw) {
+    const FontBitmap *bitmap = raw;
+    if (bitmap == NULL || bitmap->magic != BITMAP_MAGIC || bitmap->entry == NULL) {
+        fail(SILEX_FONT_INTERNAL, "a live font bitmap is required");
+        return NULL;
+    }
+    return bitmap;
+}
+
+static FontCoverage *checked_coverage(void *raw) {
+    FontCoverage *coverage = raw;
+    if (coverage == NULL || coverage->magic != COVERAGE_MAGIC) {
+        fail(SILEX_FONT_INTERNAL, "a live font coverage is required");
+        return NULL;
+    }
+    return coverage;
+}
+
+static const FontCoverage *checked_finished_coverage(const void *raw) {
+    const FontCoverage *coverage = raw;
+    if (coverage == NULL || coverage->magic != COVERAGE_MAGIC || !coverage->finished) {
+        fail(SILEX_FONT_INTERNAL, "a finished font coverage is required");
+        return NULL;
+    }
+    return coverage;
+}
+
+static void free_bitmap_entry(FontBitmapEntry *entry) {
+    if (entry == NULL) return;
+    free(entry->variations);
+    free(entry->pixels);
+    free(entry);
+}
+
+static int same_bitmap_key(
+    const FontBitmapEntry *entry,
+    const FontInstance *instance,
+    uint32_t glyph_id,
+    int32_t size_26_6,
+    int32_t hinting,
+    int32_t antialiasing
+) {
+    if (entry->glyph_id != glyph_id || entry->size_26_6 != size_26_6 ||
+        entry->hinting != hinting || entry->antialiasing != antialiasing ||
+        entry->variation_count != instance->variation_count) return 0;
+    for (unsigned int index = 0; index < entry->variation_count; ++index) {
+        if (entry->variations[index].tag != instance->variations[index].tag ||
+            entry->variations[index].value != instance->variations[index].value) return 0;
+    }
+    return 1;
+}
+
+static void evict_bitmap_cache(FontFace *face) {
+    while (face->bitmap_bytes > BITMAP_CACHE_LIMIT) {
+        uint32_t victim = UINT32_MAX;
+        uint64_t oldest = UINT64_MAX;
+        for (uint32_t index = 0; index < face->bitmap_count; ++index) {
+            FontBitmapEntry *entry = face->bitmaps[index];
+            if (entry->references == 0 && entry->last_used < oldest) {
+                oldest = entry->last_used;
+                victim = index;
+            }
+        }
+        if (victim == UINT32_MAX) return;
+        FontBitmapEntry *entry = face->bitmaps[victim];
+        face->bitmap_bytes -= entry->cache_byte_count;
+        free_bitmap_entry(entry);
+        --face->bitmap_count;
+        if (victim != face->bitmap_count) face->bitmaps[victim] = face->bitmaps[face->bitmap_count];
+    }
 }
 
 typedef struct OutlineBuilder {
@@ -551,6 +684,8 @@ void silex_font_face_destroy(void *raw) {
     face->magic = 0;
     for (uint32_t index = 0; index < face->outline_count; ++index) free_outline_entry(face->outlines[index]);
     free(face->outlines);
+    for (uint32_t index = 0; index < face->bitmap_count; ++index) free_bitmap_entry(face->bitmaps[index]);
+    free(face->bitmaps);
     hb_face_destroy(face->hb_face);
     hb_blob_destroy(face->hb_blob);
     lock_state();
@@ -949,6 +1084,415 @@ int32_t silex_font_outline_y_advance(const void *raw) { const FontOutline *o = c
 uint32_t silex_font_face_outline_decomposition_count(const void *raw) { const FontFace *f = checked_face(raw); return f == NULL ? 0 : f->outline_decomposition_count; }
 void silex_font_test_fail_outline_after(uint32_t step_count) { outline_failure_after = step_count; }
 
+void *silex_font_bitmap_create(
+    const void *raw_instance,
+    uint32_t glyph_id,
+    int32_t size_26_6,
+    int32_t hinting,
+    int32_t antialiasing
+) {
+    clear_error();
+    FontInstance *instance = checked_instance((void *)raw_instance);
+    if (instance == NULL) return NULL;
+    FontFace *face = instance->face;
+    if (face == NULL || face->magic != FACE_MAGIC) {
+        fail(SILEX_FONT_INTERNAL, "font bitmap rasterization requires a live face");
+        return NULL;
+    }
+    if (glyph_id >= (uint32_t)face->ft_face->num_glyphs) return NULL;
+    if (size_26_6 <= 0 || size_26_6 > 16384 * 64 ||
+        hinting < SILEX_FONT_HINTING_NONE || hinting > SILEX_FONT_HINTING_NORMAL ||
+        antialiasing < SILEX_FONT_ANTIALIASING_GRAYSCALE || antialiasing > SILEX_FONT_ANTIALIASING_MONOCHROME) {
+        fail(SILEX_FONT_INVALID_INPUT, "font bitmap options are outside their supported range");
+        return NULL;
+    }
+
+    lock_state();
+    FontBitmapEntry *entry = NULL;
+    for (uint32_t index = 0; index < face->bitmap_count; ++index) {
+        FontBitmapEntry *candidate = face->bitmaps[index];
+        if (same_bitmap_key(candidate, instance, glyph_id, size_26_6, hinting, antialiasing)) {
+            entry = candidate;
+            break;
+        }
+    }
+    if (entry == NULL) {
+        FT_Error error = apply_instance_variations(instance);
+        if (error == FT_Err_Ok) error = FT_Set_Char_Size(face->ft_face, 0, size_26_6, 72, 72);
+        FT_Int32 load_flags = FT_LOAD_DEFAULT;
+        if (hinting == SILEX_FONT_HINTING_NONE) load_flags |= FT_LOAD_NO_HINTING;
+        if (hinting == SILEX_FONT_HINTING_LIGHT) load_flags |= FT_LOAD_TARGET_LIGHT;
+        if (hinting == SILEX_FONT_HINTING_NORMAL) load_flags |= FT_LOAD_TARGET_NORMAL;
+        if (antialiasing == SILEX_FONT_ANTIALIASING_MONOCHROME) load_flags |= FT_LOAD_TARGET_MONO;
+        if (error == FT_Err_Ok) error = FT_Load_Glyph(face->ft_face, (FT_UInt)glyph_id, load_flags);
+        if (error == FT_Err_Ok && face->ft_face->glyph->format != FT_GLYPH_FORMAT_BITMAP) {
+            FT_Render_Mode mode = antialiasing == SILEX_FONT_ANTIALIASING_MONOCHROME
+                ? FT_RENDER_MODE_MONO
+                : FT_RENDER_MODE_NORMAL;
+            error = FT_Render_Glyph(face->ft_face->glyph, mode);
+        }
+        if (error != FT_Err_Ok) {
+            unlock_state();
+            fail_ft("could not rasterize the glyph bitmap", error);
+            return NULL;
+        }
+
+        FT_Bitmap *bitmap = &face->ft_face->glyph->bitmap;
+        if (bitmap->width > INT32_MAX || bitmap->rows > INT32_MAX ||
+            (bitmap->width > 0 && bitmap->rows > SIZE_MAX / bitmap->width)) {
+            unlock_state();
+            fail(SILEX_FONT_INVALID_INPUT, "glyph bitmap dimensions overflow the portable coverage format");
+            return NULL;
+        }
+        if (bitmap->pixel_mode != FT_PIXEL_MODE_GRAY && bitmap->pixel_mode != FT_PIXEL_MODE_MONO &&
+            bitmap->pixel_mode != FT_PIXEL_MODE_GRAY2 && bitmap->pixel_mode != FT_PIXEL_MODE_GRAY4 &&
+            bitmap->width > 0 && bitmap->rows > 0) {
+            unlock_state();
+            return NULL;
+        }
+
+        entry = calloc(1, sizeof(*entry));
+        if (entry == NULL) {
+            unlock_state();
+            fail(SILEX_FONT_OUT_OF_MEMORY, "could not allocate a glyph bitmap cache entry");
+            return NULL;
+        }
+        entry->glyph_id = glyph_id;
+        entry->variation_count = instance->variation_count;
+        entry->size_26_6 = size_26_6;
+        entry->hinting = hinting;
+        entry->antialiasing = antialiasing;
+        entry->width = (int32_t)bitmap->width;
+        entry->height = (int32_t)bitmap->rows;
+        entry->stride = entry->width;
+        entry->left = face->ft_face->glyph->bitmap_left;
+        entry->top = face->ft_face->glyph->bitmap_top;
+        entry->byte_count = (size_t)bitmap->width * bitmap->rows;
+        if (entry->variation_count > 0) {
+            entry->variations = malloc((size_t)entry->variation_count * sizeof(*entry->variations));
+            if (entry->variations == NULL) {
+                free_bitmap_entry(entry);
+                unlock_state();
+                fail(SILEX_FONT_OUT_OF_MEMORY, "could not retain glyph bitmap variation coordinates");
+                return NULL;
+            }
+            memcpy(entry->variations, instance->variations, (size_t)entry->variation_count * sizeof(*entry->variations));
+        }
+        if (entry->byte_count > 0) {
+            entry->pixels = malloc(entry->byte_count);
+            if (entry->pixels == NULL) {
+                free_bitmap_entry(entry);
+                unlock_state();
+                fail(SILEX_FONT_OUT_OF_MEMORY, "could not allocate glyph bitmap pixels");
+                return NULL;
+            }
+            size_t source_pitch = bitmap->pitch < 0 ? (size_t)(-(int64_t)bitmap->pitch) : (size_t)bitmap->pitch;
+            for (uint32_t row_index = 0; row_index < bitmap->rows; ++row_index) {
+                uint32_t source_row_index = bitmap->pitch < 0 ? bitmap->rows - 1 - row_index : row_index;
+                const uint8_t *source = bitmap->buffer + (size_t)source_row_index * source_pitch;
+                uint8_t *destination = entry->pixels + (size_t)row_index * bitmap->width;
+                for (uint32_t column = 0; column < bitmap->width; ++column) {
+                    uint8_t value = 0;
+                    if (bitmap->pixel_mode == FT_PIXEL_MODE_GRAY) {
+                        value = source[column];
+                        if (bitmap->num_grays > 1 && bitmap->num_grays != 256) {
+                            value = (uint8_t)((uint32_t)value * 255 / (bitmap->num_grays - 1));
+                        }
+                    } else if (bitmap->pixel_mode == FT_PIXEL_MODE_MONO) {
+                        value = (source[column >> 3] & (uint8_t)(0x80u >> (column & 7))) != 0 ? 255 : 0;
+                    } else if (bitmap->pixel_mode == FT_PIXEL_MODE_GRAY2) {
+                        value = (uint8_t)(((source[column >> 2] >> (6 - 2 * (column & 3))) & 3u) * 85u);
+                    } else if (bitmap->pixel_mode == FT_PIXEL_MODE_GRAY4) {
+                        value = (uint8_t)(((source[column >> 1] >> (4 - 4 * (column & 1))) & 15u) * 17u);
+                    }
+                    destination[column] = value;
+                }
+            }
+        }
+        entry->cache_byte_count =
+            sizeof(*entry) +
+            sizeof(entry) +
+            (size_t)entry->variation_count * sizeof(*entry->variations) +
+            entry->byte_count;
+
+        if (face->bitmap_count == face->bitmap_capacity) {
+            uint32_t next_capacity = face->bitmap_capacity == 0 ? 64 : face->bitmap_capacity * 2;
+            FontBitmapEntry **next = realloc(face->bitmaps, (size_t)next_capacity * sizeof(*next));
+            if (next == NULL) {
+                free_bitmap_entry(entry);
+                unlock_state();
+                fail(SILEX_FONT_OUT_OF_MEMORY, "could not grow the glyph bitmap cache");
+                return NULL;
+            }
+            face->bitmaps = next;
+            face->bitmap_capacity = next_capacity;
+        }
+        face->bitmaps[face->bitmap_count++] = entry;
+        face->bitmap_bytes += entry->cache_byte_count;
+        ++face->bitmap_rasterization_count;
+    }
+    entry->last_used = ++face->bitmap_clock;
+    ++entry->references;
+    evict_bitmap_cache(face);
+    unlock_state();
+
+    FontBitmap *result = malloc(sizeof(*result));
+    if (result == NULL) {
+        lock_state(); if (entry->references > 0) --entry->references; evict_bitmap_cache(face); unlock_state();
+        fail(SILEX_FONT_OUT_OF_MEMORY, "could not allocate the glyph bitmap handle");
+        return NULL;
+    }
+    result->magic = BITMAP_MAGIC;
+    result->face = face;
+    result->entry = entry;
+    lock_state(); ++state.bitmaps; unlock_state();
+    return result;
+}
+
+void silex_font_bitmap_destroy(void *raw) {
+    if (raw == NULL) return;
+    FontBitmap *bitmap = raw;
+    if (bitmap->magic != BITMAP_MAGIC) {
+        fail(SILEX_FONT_INTERNAL, "invalid font bitmap handle");
+        return;
+    }
+    lock_state();
+    if (bitmap->entry->references > 0) --bitmap->entry->references;
+    evict_bitmap_cache(bitmap->face);
+    if (state.bitmaps > 0) --state.bitmaps;
+    unlock_state();
+    bitmap->magic = 0;
+    free(bitmap);
+}
+
+int32_t silex_font_bitmap_width(const void *raw) { const FontBitmap *b = checked_bitmap(raw); return b == NULL ? 0 : b->entry->width; }
+int32_t silex_font_bitmap_height(const void *raw) { const FontBitmap *b = checked_bitmap(raw); return b == NULL ? 0 : b->entry->height; }
+int32_t silex_font_bitmap_stride(const void *raw) { const FontBitmap *b = checked_bitmap(raw); return b == NULL ? 0 : b->entry->stride; }
+int32_t silex_font_bitmap_left(const void *raw) { const FontBitmap *b = checked_bitmap(raw); return b == NULL ? 0 : b->entry->left; }
+int32_t silex_font_bitmap_top(const void *raw) { const FontBitmap *b = checked_bitmap(raw); return b == NULL ? 0 : b->entry->top; }
+
+int32_t silex_font_bitmap_copy_pixels(const void *raw, uint8_t *output, size_t byte_count) {
+    const FontBitmap *bitmap = checked_bitmap(raw);
+    if (bitmap == NULL) return 0;
+    if (byte_count != bitmap->entry->byte_count || (byte_count > 0 && output == NULL)) {
+        fail(SILEX_FONT_INVALID_INPUT, "glyph bitmap output buffer has the wrong size");
+        return 0;
+    }
+    if (byte_count > 0) memcpy(output, bitmap->entry->pixels, byte_count);
+    return 1;
+}
+
+uint32_t silex_font_face_bitmap_rasterization_count(const void *raw) { const FontFace *f = checked_face(raw); return f == NULL ? 0 : f->bitmap_rasterization_count; }
+uint32_t silex_font_face_bitmap_cache_entry_count(const void *raw) { const FontFace *f = checked_face(raw); return f == NULL ? 0 : f->bitmap_count; }
+size_t silex_font_face_bitmap_cache_byte_count(const void *raw) { const FontFace *f = checked_face(raw); return f == NULL ? 0 : f->bitmap_bytes; }
+
+void *silex_font_coverage_create(
+    const void *raw_instance,
+    int32_t size_26_6,
+    int32_t hinting,
+    int32_t antialiasing
+) {
+    clear_error();
+    FontInstance *instance = checked_instance((void *)raw_instance);
+    if (instance == NULL) return NULL;
+    if (size_26_6 <= 0 || size_26_6 > 16384 * 64 ||
+        hinting < SILEX_FONT_HINTING_NONE || hinting > SILEX_FONT_HINTING_NORMAL ||
+        antialiasing < SILEX_FONT_ANTIALIASING_GRAYSCALE ||
+        antialiasing > SILEX_FONT_ANTIALIASING_MONOCHROME) {
+        fail(SILEX_FONT_INVALID_INPUT, "font coverage options are outside their supported range");
+        return NULL;
+    }
+    FontCoverage *coverage = calloc(1, sizeof(*coverage));
+    if (coverage == NULL) {
+        fail(SILEX_FONT_OUT_OF_MEMORY, "could not allocate the font coverage builder");
+        return NULL;
+    }
+    coverage->magic = COVERAGE_MAGIC;
+    coverage->instance = instance;
+    coverage->size_26_6 = size_26_6;
+    coverage->hinting = hinting;
+    coverage->antialiasing = antialiasing;
+    lock_state(); ++state.coverages; unlock_state();
+    return coverage;
+}
+
+int32_t silex_font_coverage_add_glyph(
+    void *raw,
+    uint32_t glyph_id,
+    int32_t origin_x,
+    int32_t origin_y
+) {
+    clear_error();
+    FontCoverage *coverage = checked_coverage(raw);
+    if (coverage == NULL) return 0;
+    if (coverage->finished) {
+        fail(SILEX_FONT_INVALID_INPUT, "cannot append a glyph to a finished font coverage");
+        return 0;
+    }
+    FontBitmap *bitmap = silex_font_bitmap_create(
+        coverage->instance,
+        glyph_id,
+        coverage->size_26_6,
+        coverage->hinting,
+        coverage->antialiasing
+    );
+    if (bitmap == NULL) return 0;
+    if (coverage->glyph_count == coverage->glyph_capacity) {
+        uint32_t next_capacity = coverage->glyph_capacity == 0 ? 64 : coverage->glyph_capacity * 2;
+        if (next_capacity < coverage->glyph_capacity ||
+            (size_t)next_capacity > SIZE_MAX / sizeof(*coverage->glyphs)) {
+            silex_font_bitmap_destroy(bitmap);
+            fail(SILEX_FONT_OUT_OF_MEMORY, "font coverage glyph capacity overflow");
+            return 0;
+        }
+        FontCoverageGlyph *next = realloc(
+            coverage->glyphs,
+            (size_t)next_capacity * sizeof(*next)
+        );
+        if (next == NULL) {
+            silex_font_bitmap_destroy(bitmap);
+            fail(SILEX_FONT_OUT_OF_MEMORY, "could not grow the font coverage glyph list");
+            return 0;
+        }
+        coverage->glyphs = next;
+        coverage->glyph_capacity = next_capacity;
+    }
+    FontCoverageGlyph *glyph = &coverage->glyphs[coverage->glyph_count++];
+    glyph->bitmap = bitmap;
+    glyph->origin_x = origin_x;
+    glyph->origin_y = origin_y;
+    return 1;
+}
+
+int32_t silex_font_coverage_finish(void *raw, int32_t padding, size_t maximum_pixels) {
+    clear_error();
+    FontCoverage *coverage = checked_coverage(raw);
+    if (coverage == NULL) return 0;
+    if (coverage->finished) return 1;
+    if (padding < 0 || padding > 4096 || maximum_pixels == 0) {
+        fail(SILEX_FONT_INVALID_INPUT, "font coverage limits are outside their supported range");
+        return 0;
+    }
+
+    int has_ink = 0;
+    int64_t minimum_x = 0;
+    int64_t minimum_y = 0;
+    int64_t maximum_x = 0;
+    int64_t maximum_y = 0;
+    for (uint32_t index = 0; index < coverage->glyph_count; ++index) {
+        FontCoverageGlyph *glyph = &coverage->glyphs[index];
+        const FontBitmap *bitmap = checked_bitmap(glyph->bitmap);
+        if (bitmap == NULL) return 0;
+        const FontBitmapEntry *entry = bitmap->entry;
+        if (entry->width == 0 || entry->height == 0) continue;
+        int64_t left = (int64_t)glyph->origin_x + entry->left;
+        int64_t top = (int64_t)glyph->origin_y + entry->top;
+        int64_t right = left + entry->width;
+        int64_t bottom = top - entry->height;
+        if (!has_ink) {
+            minimum_x = left;
+            minimum_y = bottom;
+            maximum_x = right;
+            maximum_y = top;
+            has_ink = 1;
+        } else {
+            if (left < minimum_x) minimum_x = left;
+            if (bottom < minimum_y) minimum_y = bottom;
+            if (right > maximum_x) maximum_x = right;
+            if (top > maximum_y) maximum_y = top;
+        }
+    }
+    if (!has_ink) {
+        coverage->finished = 1;
+        return 1;
+    }
+
+    int64_t padded_minimum_x = minimum_x - padding;
+    int64_t padded_maximum_y = maximum_y + padding;
+    int64_t width = maximum_x - minimum_x + (int64_t)padding * 2;
+    int64_t height = maximum_y - minimum_y + (int64_t)padding * 2;
+    if (padded_minimum_x < INT32_MIN || padded_minimum_x > INT32_MAX ||
+        padded_maximum_y < INT32_MIN || padded_maximum_y > INT32_MAX ||
+        width <= 0 || height <= 0 || width > INT32_MAX || height > INT32_MAX ||
+        (uint64_t)width > maximum_pixels || (uint64_t)height > maximum_pixels ||
+        (uint64_t)width > maximum_pixels / (uint64_t)height) {
+        fail(SILEX_FONT_INVALID_INPUT, "font coverage exceeds its portable allocation limit");
+        return 0;
+    }
+    coverage->byte_count = (size_t)width * (size_t)height;
+    coverage->pixels = calloc(coverage->byte_count, 1);
+    if (coverage->pixels == NULL) {
+        coverage->byte_count = 0;
+        fail(SILEX_FONT_OUT_OF_MEMORY, "could not allocate font coverage pixels");
+        return 0;
+    }
+    coverage->width = (int32_t)width;
+    coverage->height = (int32_t)height;
+    coverage->stride = coverage->width;
+    coverage->origin_x = (int32_t)padded_minimum_x;
+    coverage->origin_y = (int32_t)padded_maximum_y;
+
+    for (uint32_t index = 0; index < coverage->glyph_count; ++index) {
+        FontCoverageGlyph *glyph = &coverage->glyphs[index];
+        const FontBitmapEntry *entry = glyph->bitmap->entry;
+        if (entry->width == 0 || entry->height == 0) continue;
+        int64_t left = (int64_t)glyph->origin_x + entry->left;
+        int64_t top = (int64_t)glyph->origin_y + entry->top;
+        size_t destination_x = (size_t)(left - padded_minimum_x);
+        size_t destination_y = (size_t)(padded_maximum_y - top);
+        for (int32_t row = 0; row < entry->height; ++row) {
+            for (int32_t column = 0; column < entry->width; ++column) {
+                size_t source_index = (size_t)row * (size_t)entry->stride + (size_t)column;
+                size_t destination_index =
+                    (destination_y + (size_t)row) * (size_t)coverage->stride +
+                    destination_x + (size_t)column;
+                uint32_t source_alpha = entry->pixels[source_index];
+                uint32_t destination_alpha = coverage->pixels[destination_index];
+                coverage->pixels[destination_index] = (uint8_t)(
+                    source_alpha +
+                    (destination_alpha * (255u - source_alpha) + 127u) / 255u
+                );
+            }
+        }
+    }
+    coverage->finished = 1;
+    return 1;
+}
+
+void silex_font_coverage_destroy(void *raw) {
+    if (raw == NULL) return;
+    FontCoverage *coverage = raw;
+    if (coverage->magic != COVERAGE_MAGIC) {
+        fail(SILEX_FONT_INTERNAL, "invalid font coverage handle");
+        return;
+    }
+    coverage->magic = 0;
+    for (uint32_t index = 0; index < coverage->glyph_count; ++index) {
+        silex_font_bitmap_destroy(coverage->glyphs[index].bitmap);
+    }
+    free(coverage->glyphs);
+    free(coverage->pixels);
+    free(coverage);
+    lock_state(); if (state.coverages > 0) --state.coverages; unlock_state();
+}
+
+int32_t silex_font_coverage_width(const void *raw) { const FontCoverage *c = checked_finished_coverage(raw); return c == NULL ? 0 : c->width; }
+int32_t silex_font_coverage_height(const void *raw) { const FontCoverage *c = checked_finished_coverage(raw); return c == NULL ? 0 : c->height; }
+int32_t silex_font_coverage_stride(const void *raw) { const FontCoverage *c = checked_finished_coverage(raw); return c == NULL ? 0 : c->stride; }
+int32_t silex_font_coverage_origin_x(const void *raw) { const FontCoverage *c = checked_finished_coverage(raw); return c == NULL ? 0 : c->origin_x; }
+int32_t silex_font_coverage_origin_y(const void *raw) { const FontCoverage *c = checked_finished_coverage(raw); return c == NULL ? 0 : c->origin_y; }
+
+int32_t silex_font_coverage_copy_pixels(const void *raw, uint8_t *output, size_t byte_count) {
+    const FontCoverage *coverage = checked_finished_coverage(raw);
+    if (coverage == NULL) return 0;
+    if (byte_count != coverage->byte_count || (byte_count > 0 && output == NULL)) {
+        fail(SILEX_FONT_INVALID_INPUT, "font coverage output buffer has the wrong size");
+        return 0;
+    }
+    if (byte_count > 0) memcpy(output, coverage->pixels, byte_count);
+    return 1;
+}
+
 void *silex_font_shape_create(
     const void *raw_instance,
     const uint8_t *utf8,
@@ -1231,3 +1775,5 @@ uint32_t silex_font_live_library_count(void) { lock_state(); uint32_t value = st
 uint32_t silex_font_live_face_count(void) { lock_state(); uint32_t value = state.faces; unlock_state(); return value; }
 uint32_t silex_font_live_instance_count(void) { lock_state(); uint32_t value = state.instances; unlock_state(); return value; }
 uint32_t silex_font_live_outline_count(void) { lock_state(); uint32_t value = state.outlines; unlock_state(); return value; }
+uint32_t silex_font_live_bitmap_count(void) { lock_state(); uint32_t value = state.bitmaps; unlock_state(); return value; }
+uint32_t silex_font_live_coverage_count(void) { lock_state(); uint32_t value = state.coverages; unlock_state(); return value; }

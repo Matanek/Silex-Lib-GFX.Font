@@ -194,6 +194,56 @@ repeated glyphs in a run do not copy their points again. The package neither
 tessellates these paths nor imports a Canvas or GPU API; those decisions belong
 to GFX consumers.
 
+## Rasterize small text with hinting
+
+`GlyphRun.rasterize` converts already-shaped glyphs into an 8-bit grayscale
+`Coverage`. It does not reread the string or recompute clusters, ligatures, or
+kerning. This path is intended for small UI text and terminal cells, where
+FreeType hinting remains sharper than downscaled vector tessellation. Outlines
+remain the better choice for zooming, transformed scenes, and geometric
+effects.
+
+Given a valid `run`, this fragment produces a density-2 mask with two physical
+pixels of padding:
+
+```sx
+match run.rasterize(Font.RasterOptions(
+    density:2.0,
+    hinting:Font.Hinting.normal,
+    antialiasing:Font.Antialiasing.grayscale,
+    padding:2
+)) {
+    failure(error) => { print(error.detail) }
+    success(coverage) => {
+        print("$(coverage.width) × $(coverage.height)")
+        print("physical baseline: $(coverage.baseline)")
+    }
+}
+```
+
+`alpha` contains `height * stride` bytes, with a compact stride equal to the
+width. Rows are stored from top to bottom. `origin` places the mask’s top-left
+corner in the run’s physical coordinate system, whose baseline is Y = 0 and
+whose Y axis points upward; `baseline` therefore gives its signed row
+coordinate relative to the coverage top. This index may lie outside the
+mask, for example when a glyph sits entirely below the baseline. `bounds`
+describes ink only, in logical units, and excludes padding. `advance` remains
+the run’s logical advance, so changing density or hinting does not alter
+layout.
+
+A space or empty string returns a valid 0×0 coverage. A space still keeps its
+advance. `maximum_pixels`, 16,777,216 by default, rejects excessive dimensions
+or products before allocation. A non-positive or non-finite density, negative
+padding, and excessive coverage produce `invalid_density`, `invalid_padding`,
+and `coverage_too_large`, respectively.
+
+Glyph bitmaps are shared by face, variations, glyph ID, physical size, and
+hinting options in a native cache limited to 16 MiB. Run coverages belong to
+the instance and have a separate 8 MiB limit. A changed line can therefore
+recompose warm glyphs without rasterizing them again, while historical lines
+are evicted without clearing the glyph cache. RGB subpixel antialiasing and
+color glyphs are outside this first alpha-coverage format.
+
 ## Use bundled fonts
 
 `Face.default()` loads variable Noto Sans and `Face.monospace()` loads Noto Sans
@@ -206,13 +256,15 @@ compose their faces from assets and explicit paths.
 
 ## Native boundary
 
-Private ABI v4 is distributed for macOS ARM64, Linux x64, Windows x64, and
+Private ABI v5 is distributed for macOS ARM64, Linux x64, Windows x64, and
 Windows ARM64. A face owns its bytes and the corresponding FreeType/HarfBuzz
 views. Every instance owns separate HarfBuzz variation state. Outline
 extraction applies the same coordinates to FreeType under a lock, then caches
 an immutable decomposition that is independent from logical size. The shaping
 protocol copies glyphs, clusters, positions, and extents before destroying its
-HarfBuzz buffer. No native handle or type crosses the public API.
+HarfBuzz buffer. It also rasterizes the shaped glyph IDs, shares their bounded
+bitmaps, and composes runs in a native buffer before copying compact alpha. No
+native handle or type crosses the public API.
 
 Windows ARM64 remains a recognized experimental target: its archive and link
 provide structural evidence, not native execution.

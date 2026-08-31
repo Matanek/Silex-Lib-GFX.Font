@@ -38,6 +38,23 @@ package struct OutlineData {
     let x_advance:int
     let y_advance:int
 }
+package struct GlyphBitmap {
+    let pixels:uint8[]
+    let width:int
+    let height:int
+    let stride:int
+    let left:int
+    let top:int
+}
+package struct RasterGlyph { let id:uint32; let origin_x:int; let origin_y:int }
+package struct RunCoverage {
+    let pixels:uint8[]
+    let width:int
+    let height:int
+    let stride:int
+    let origin_x:int
+    let origin_y:int
+}
 package struct ShapedGlyph {
     let id:uint32
     let cluster_start:int
@@ -195,6 +212,136 @@ package func outline(handle:uint, glyph_id:uint32) Result<OutlineData?, Error> {
     return Result<OutlineData?, Error>.success(result)
 }
 
+package func raster_glyph(
+    handle:uint,
+    glyph_id:uint32,
+    size_26_6:int,
+    hinting:int,
+    antialiasing:int
+) Result<GlyphBitmap?, Error> {
+    let raw = C.address_bits(bitmap_create(
+        C.pointer_bits(handle), glyph_id, size_26_6 as int32,
+        hinting as int32, antialiasing as int32
+    ))
+    if raw == 0 as uint {
+        if boundary_last_error_code() == 0 {
+            return Result<GlyphBitmap?, Error>.success(null)
+        }
+        return Result<GlyphBitmap?, Error>.failure(last_error())
+    }
+    let width = signed32(bitmap_width(C.pointer_bits(raw)))
+    let height = signed32(bitmap_height(C.pointer_bits(raw)))
+    let stride = signed32(bitmap_stride(C.pointer_bits(raw)))
+    let byte_count = stride * height
+    var pixels:uint8[] = []
+    if byte_count > 0 {
+        var storage:uint8[] = []
+        while storage.count() < byte_count { storage.append(0 as uint8) }
+        var packed = C.string(@storage[0:storage.count()])
+        if bitmap_copy_pixels(
+            C.pointer_bits(raw), C.mutable_string_pointer(packed), byte_count as C.Size
+        ) == 0 {
+            let error = last_error()
+            bitmap_destroy(C.pointer_bits(raw))
+            return Result<GlyphBitmap?, Error>.failure(error)
+        }
+        var index = 0
+        while index < byte_count {
+            pixels.append(C.byte_at(packed, index as C.Size))
+            index++
+        }
+    }
+    let result = GlyphBitmap(
+        pixels:pixels,
+        width:width,
+        height:height,
+        stride:stride,
+        left:signed32(bitmap_left(C.pointer_bits(raw))),
+        top:signed32(bitmap_top(C.pointer_bits(raw)))
+    )
+    bitmap_destroy(C.pointer_bits(raw))
+    return Result<GlyphBitmap?, Error>.success(result)
+}
+
+package func raster_coverage(
+    handle:uint,
+    glyphs:RasterGlyph[],
+    size_26_6:int,
+    hinting:int,
+    antialiasing:int,
+    padding:int,
+    maximum_pixels:int
+) Result<RunCoverage, Error> {
+    let raw = C.address_bits(coverage_create(
+        C.pointer_bits(handle),
+        size_26_6 as int32,
+        hinting as int32,
+        antialiasing as int32
+    ))
+    if raw == 0 as uint { return Result<RunCoverage, Error>.failure(last_error()) }
+    for glyph in glyphs {
+        if coverage_add_glyph(
+            C.pointer_bits(raw),
+            glyph.id,
+            glyph.origin_x as int32,
+            glyph.origin_y as int32
+        ) == 0 {
+            var error = last_error()
+            if boundary_last_error_code() == 0 {
+                error = Error(
+                    kind:ErrorKind.unsupported,
+                    detail:"glyph $(glyph.id) has no grayscale-compatible raster coverage"
+                )
+            }
+            coverage_destroy(C.pointer_bits(raw))
+            return Result<RunCoverage, Error>.failure(error)
+        }
+    }
+    if coverage_finish(
+        C.pointer_bits(raw),
+        padding as int32,
+        maximum_pixels as C.Size
+    ) == 0 {
+        let error = last_error()
+        coverage_destroy(C.pointer_bits(raw))
+        return Result<RunCoverage, Error>.failure(error)
+    }
+    let width = signed32(coverage_width(C.pointer_bits(raw)))
+    let height = signed32(coverage_height(C.pointer_bits(raw)))
+    let stride = signed32(coverage_stride(C.pointer_bits(raw)))
+    let byte_count = stride * height
+    var pixels:uint8[] = []
+    if byte_count > 0 {
+        var storage:uint8[] = []
+        while storage.count() < byte_count { storage.append(0 as uint8) }
+        var packed = C.string(@storage[0:storage.count()])
+        if coverage_copy_pixels(
+            C.pointer_bits(raw),
+            C.mutable_string_pointer(packed),
+            byte_count as C.Size
+        ) == 0 {
+            let error = last_error()
+            coverage_destroy(C.pointer_bits(raw))
+            return Result<RunCoverage, Error>.failure(error)
+        }
+        var index = 0
+        while index < byte_count {
+            pixels.append(C.byte_at(packed, index as C.Size))
+            index++
+        }
+    }
+    let result = RunCoverage(
+        pixels:pixels,
+        width:width,
+        height:height,
+        stride:stride,
+        origin_x:signed32(coverage_origin_x(C.pointer_bits(raw))),
+        origin_y:signed32(coverage_origin_y(C.pointer_bits(raw)))
+    )
+    coverage_destroy(C.pointer_bits(raw))
+    return Result<RunCoverage, Error>.success(result)
+}
+
 package func shape(
     handle:uint,
     text:str,
@@ -265,9 +412,14 @@ package func live_library_count() int { return boundary_live_library_count() as 
 package func live_face_count() int { return boundary_live_face_count() as int }
 package func live_instance_count() int { return boundary_live_instance_count() as int }
 package func live_outline_count() int { return boundary_live_outline_count() as int }
+package func live_bitmap_count() int { return boundary_live_bitmap_count() as int }
+package func live_coverage_count() int { return boundary_live_coverage_count() as int }
 package func instance_shape_count(handle:uint) int { return boundary_instance_shape_count(C.pointer_bits(handle)) as int }
 package func face_outline_decomposition_count(handle:uint) int { return boundary_face_outline_decomposition_count(C.pointer_bits(handle)) as int }
 package func fail_outline_after_for_test(step_count:int) { boundary_fail_outline_after(step_count as uint32) }
+package func face_bitmap_rasterization_count(handle:uint) int { return boundary_face_bitmap_rasterization_count(C.pointer_bits(handle)) as int }
+package func face_bitmap_cache_entry_count(handle:uint) int { return boundary_face_bitmap_cache_entry_count(C.pointer_bits(handle)) as int }
+package func face_bitmap_cache_byte_count(handle:uint) int { return boundary_face_bitmap_cache_byte_count(C.pointer_bits(handle)) as int }
 
 package func rejects_invalid_utf8_for_test(handle:uint) bool {
     let invalid:uint8[] = [195 as uint8, 40 as uint8]
@@ -284,8 +436,8 @@ package func rejects_invalid_utf8_for_test(handle:uint) bool {
 }
 
 func verify_abi() Result<void, Error> {
-    if abi_version() != 4 as uint32 {
-        return Result<void, Error>.failure(Error(kind:ErrorKind.abi_mismatch, detail:"GFX.Font expected native ABI version 4"))
+    if abi_version() != 5 as uint32 {
+        return Result<void, Error>.failure(Error(kind:ErrorKind.abi_mismatch, detail:"GFX.Font expected native ABI version 5"))
     }
     if abi_pointer_size() != 8 as uint32 || abi_size_size() != 8 as uint32 || abi_pointer_alignment() != 8 as uint32 {
         return Result<void, Error>.failure(Error(kind:ErrorKind.abi_mismatch, detail:"GFX.Font requires the 64-bit Silex ABI layout"))
@@ -379,6 +531,24 @@ let outline_x_max = C.function<func(C.Pointer<uint8>) int32>(library:Boundary.Fo
 let outline_y_max = C.function<func(C.Pointer<uint8>) int32>(library:Boundary.FontBoundary, name:"silex_font_outline_y_max")
 let outline_x_advance = C.function<func(C.Pointer<uint8>) int32>(library:Boundary.FontBoundary, name:"silex_font_outline_x_advance")
 let outline_y_advance = C.function<func(C.Pointer<uint8>) int32>(library:Boundary.FontBoundary, name:"silex_font_outline_y_advance")
+let bitmap_create = C.function<func(C.Pointer<uint8>, uint32, int32, int32, int32) C.Pointer<uint8> >(library:Boundary.FontBoundary, name:"silex_font_bitmap_create")
+let bitmap_destroy = C.function<func(C.Pointer<uint8>) void>(library:Boundary.FontBoundary, name:"silex_font_bitmap_destroy")
+let bitmap_width = C.function<func(C.Pointer<uint8>) int32>(library:Boundary.FontBoundary, name:"silex_font_bitmap_width")
+let bitmap_height = C.function<func(C.Pointer<uint8>) int32>(library:Boundary.FontBoundary, name:"silex_font_bitmap_height")
+let bitmap_stride = C.function<func(C.Pointer<uint8>) int32>(library:Boundary.FontBoundary, name:"silex_font_bitmap_stride")
+let bitmap_left = C.function<func(C.Pointer<uint8>) int32>(library:Boundary.FontBoundary, name:"silex_font_bitmap_left")
+let bitmap_top = C.function<func(C.Pointer<uint8>) int32>(library:Boundary.FontBoundary, name:"silex_font_bitmap_top")
+let bitmap_copy_pixels = C.function<func(C.Pointer<uint8>, C.MutablePointer<uint8>, C.Size) int32>(library:Boundary.FontBoundary, name:"silex_font_bitmap_copy_pixels")
+let coverage_create = C.function<func(C.Pointer<uint8>, int32, int32, int32) C.Pointer<uint8> >(library:Boundary.FontBoundary, name:"silex_font_coverage_create")
+let coverage_add_glyph = C.function<func(C.Pointer<uint8>, uint32, int32, int32) int32>(library:Boundary.FontBoundary, name:"silex_font_coverage_add_glyph")
+let coverage_finish = C.function<func(C.Pointer<uint8>, int32, C.Size) int32>(library:Boundary.FontBoundary, name:"silex_font_coverage_finish")
+let coverage_destroy = C.function<func(C.Pointer<uint8>) void>(library:Boundary.FontBoundary, name:"silex_font_coverage_destroy")
+let coverage_width = C.function<func(C.Pointer<uint8>) int32>(library:Boundary.FontBoundary, name:"silex_font_coverage_width")
+let coverage_height = C.function<func(C.Pointer<uint8>) int32>(library:Boundary.FontBoundary, name:"silex_font_coverage_height")
+let coverage_stride = C.function<func(C.Pointer<uint8>) int32>(library:Boundary.FontBoundary, name:"silex_font_coverage_stride")
+let coverage_origin_x = C.function<func(C.Pointer<uint8>) int32>(library:Boundary.FontBoundary, name:"silex_font_coverage_origin_x")
+let coverage_origin_y = C.function<func(C.Pointer<uint8>) int32>(library:Boundary.FontBoundary, name:"silex_font_coverage_origin_y")
+let coverage_copy_pixels = C.function<func(C.Pointer<uint8>, C.MutablePointer<uint8>, C.Size) int32>(library:Boundary.FontBoundary, name:"silex_font_coverage_copy_pixels")
 let shape_create = C.function<func(C.Pointer<uint8>, C.Pointer<uint8>, C.Size, int32, uint32, C.Pointer<uint8>, C.Size) C.Pointer<uint8> >(library:Boundary.FontBoundary, name:"silex_font_shape_create")
 let shape_add_feature = C.function<func(C.Pointer<uint8>, uint32, uint32, uint32, uint32) int32>(library:Boundary.FontBoundary, name:"silex_font_shape_add_feature")
 let shape_finish = C.function<func(C.Pointer<uint8>) int32>(library:Boundary.FontBoundary, name:"silex_font_shape_finish")
@@ -406,9 +576,14 @@ let shape_y_advance = C.function<func(C.Pointer<uint8>) int32>(library:Boundary.
 let boundary_instance_shape_count = C.function<func(C.Pointer<uint8>) uint32>(library:Boundary.FontBoundary, name:"silex_font_instance_shape_count")
 let boundary_face_outline_decomposition_count = C.function<func(C.Pointer<uint8>) uint32>(library:Boundary.FontBoundary, name:"silex_font_face_outline_decomposition_count")
 let boundary_fail_outline_after = C.function<func(uint32) void>(library:Boundary.FontBoundary, name:"silex_font_test_fail_outline_after")
+let boundary_face_bitmap_rasterization_count = C.function<func(C.Pointer<uint8>) uint32>(library:Boundary.FontBoundary, name:"silex_font_face_bitmap_rasterization_count")
+let boundary_face_bitmap_cache_entry_count = C.function<func(C.Pointer<uint8>) uint32>(library:Boundary.FontBoundary, name:"silex_font_face_bitmap_cache_entry_count")
+let boundary_face_bitmap_cache_byte_count = C.function<func(C.Pointer<uint8>) C.Size>(library:Boundary.FontBoundary, name:"silex_font_face_bitmap_cache_byte_count")
 let boundary_last_error_code = C.function<func() int32>(library:Boundary.FontBoundary, name:"silex_font_last_error_code")
 let boundary_last_error_detail = C.function<func() C.Pointer<uint8> >(library:Boundary.FontBoundary, name:"silex_font_last_error_detail")
 let boundary_live_library_count = C.function<func() uint32>(library:Boundary.FontBoundary, name:"silex_font_live_library_count")
 let boundary_live_face_count = C.function<func() uint32>(library:Boundary.FontBoundary, name:"silex_font_live_face_count")
 let boundary_live_instance_count = C.function<func() uint32>(library:Boundary.FontBoundary, name:"silex_font_live_instance_count")
 let boundary_live_outline_count = C.function<func() uint32>(library:Boundary.FontBoundary, name:"silex_font_live_outline_count")
+let boundary_live_bitmap_count = C.function<func() uint32>(library:Boundary.FontBoundary, name:"silex_font_live_bitmap_count")
+let boundary_live_coverage_count = C.function<func() uint32>(library:Boundary.FontBoundary, name:"silex_font_live_coverage_count")

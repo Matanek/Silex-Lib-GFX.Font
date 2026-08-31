@@ -11,6 +11,9 @@ public enum ErrorKind {
     invalid_data
     face_index_out_of_range
     invalid_size
+    invalid_density
+    invalid_padding
+    coverage_too_large
     invalid_tag
     invalid_text
     invalid_language
@@ -154,6 +157,48 @@ public struct PlacedOutline {
     let transform:OutlineTransform
 }
 
+public enum Hinting { none; light; normal }
+public enum Antialiasing { grayscale; monochrome }
+
+public struct RasterOptions {
+    let density:float64
+    let hinting:Hinting
+    let antialiasing:Antialiasing
+    let padding:int
+    let maximum_pixels:int
+
+    init(
+        density:float64 = 1.0,
+        hinting:Hinting = Hinting.normal(),
+        antialiasing:Antialiasing = Antialiasing.grayscale(),
+        padding:int = 0,
+        maximum_pixels:int = 16777216
+    ) {
+        self.density = density
+        self.hinting = hinting
+        self.antialiasing = antialiasing
+        self.padding = padding
+        self.maximum_pixels = maximum_pixels
+    }
+}
+
+public struct PixelPosition { let x:int; let y:int }
+
+public struct Coverage {
+    let alpha:uint8[]
+    let width:int
+    let height:int
+    let stride:int
+    let origin:PixelPosition
+    let baseline:int
+    let bounds:Bounds
+    let advance:Position
+    let density:float64
+
+    func is_empty() bool { return self.width == 0 || self.height == 0 }
+    func byte_count() int { return self.alpha.count() }
+}
+
 public enum Direction {
     left_to_right
     right_to_left
@@ -228,6 +273,7 @@ public struct RunMetrics {
 }
 
 struct GlyphRunData {
+    let cache_key:str
     let text:str
     let direction:Direction
     let script:str
@@ -236,6 +282,7 @@ struct GlyphRunData {
     let metrics:RunMetrics
 
     init(
+        cache_key:str,
         text:str,
         direction:Direction,
         script:str,
@@ -243,6 +290,7 @@ struct GlyphRunData {
         glyphs:Glyph[],
         metrics:RunMetrics
     ) {
+        self.cache_key = cache_key
         self.text = text
         self.direction = direction
         self.script = script
@@ -298,6 +346,49 @@ class OutlineCache {
             self.cursor = (self.cursor + 1) % 512
         }
     }
+}
+
+struct CoverageCacheEntry { let key:str; let coverage:Coverage; let byte_count:int }
+
+class CoverageCache {
+    private var entries:CoverageCacheEntry[] = []
+    private var bytes:int = 0
+
+    func find(key:str) Coverage? {
+        for entry in self.entries {
+            if entry.key == key { return entry.coverage }
+        }
+        return null
+    }
+
+    func insert(key:str, coverage:Coverage) {
+        let byte_count = coverage.byte_count() + key.count() + 128
+        if byte_count > 8388608 { return }
+        while self.entries.count() > 0 && self.bytes + byte_count > 8388608 {
+            self.discard_oldest()
+        }
+        self.entries.append(CoverageCacheEntry(
+            key:key,
+            coverage:coverage,
+            byte_count:byte_count
+        ))
+        self.bytes += byte_count
+    }
+
+    private func discard_oldest() {
+        if self.entries.count() == 0 { return }
+        self.bytes -= self.entries[0].byte_count
+        var retained:CoverageCacheEntry[] = []
+        var index = 1
+        while index < self.entries.count() {
+            retained.append(self.entries[index])
+            index++
+        }
+        self.entries = retained
+    }
+
+    func byte_count() int { return self.bytes }
+    func entry_count() int { return self.entries.count() }
 }
 struct ValidatedShape {
     let key:str
@@ -447,6 +538,15 @@ public class Face {
     package func native_outline_decomposition_count() int {
         return Native.face_outline_decomposition_count(self.face_handle)
     }
+    package func native_bitmap_rasterization_count() int {
+        return Native.face_bitmap_rasterization_count(self.face_handle)
+    }
+    package func native_bitmap_cache_entry_count() int {
+        return Native.face_bitmap_cache_entry_count(self.face_handle)
+    }
+    package func native_bitmap_cache_byte_count() int {
+        return Native.face_bitmap_cache_byte_count(self.face_handle)
+    }
 }
 
 public class Instance {
@@ -458,6 +558,7 @@ public class Instance {
     private let stable_identity:str
     private var shaping_cache:ShapeCache
     private var outline_cache:OutlineCache
+    private var coverage_cache:CoverageCache
 
     private init(
         face:Face,
@@ -475,6 +576,7 @@ public class Instance {
         self.stable_identity = identity
         self.shaping_cache = ShapeCache()
         self.outline_cache = OutlineCache()
+        self.coverage_cache = CoverageCache()
     }
 
     drop {
@@ -594,7 +696,7 @@ public class Instance {
                 ) {
                     failure(error) => { return Result<GlyphRun, Error>.failure(public_error(error)) }
                     success(shaped) => {
-                        let data = glyph_run_data(self, text, shaped)
+                        let data = glyph_run_data(self, validated.key, text, shaped)
                         self.shaping_cache.insert(validated.key, data)
                         return Result<GlyphRun, Error>.success(GlyphRun(self, data))
                     }
@@ -605,6 +707,10 @@ public class Instance {
 
     package func native_handle() uint { return self.instance_handle }
     package func native_shape_count() int { return Native.instance_shape_count(self.instance_handle) }
+    module func cached_coverage(key:str) Coverage? { return self.coverage_cache.find(key) }
+    module func cache_coverage(key:str, coverage:Coverage) { self.coverage_cache.insert(key, coverage) }
+    package func coverage_cache_byte_count() int { return self.coverage_cache.byte_count() }
+    package func coverage_cache_entry_count() int { return self.coverage_cache.entry_count() }
 }
 
 public class GlyphRun {
@@ -660,6 +766,129 @@ public class GlyphRun {
         }
         return Result<PlacedOutline[], Error>.success(result)
     }
+
+    func rasterize(options:RasterOptions = RasterOptions()) Result<Coverage, Error> {
+        return rasterize_run(self.instance_value, self.data, options)
+    }
+}
+
+func rasterize_run(instance:Instance, data:GlyphRunData, options:RasterOptions) Result<Coverage, Error> {
+    if options.density <= 0.0 || !Math.is_finite(options.density) {
+        return Result<Coverage, Error>.failure(Error(
+            kind:ErrorKind.invalid_density,
+            detail:"font raster density must be positive and finite"
+        ))
+    }
+    if options.padding < 0 || options.padding > 4096 {
+        return Result<Coverage, Error>.failure(Error(
+            kind:ErrorKind.invalid_padding,
+            detail:"font raster padding must be between zero and 4096 physical pixels"
+        ))
+    }
+    if options.maximum_pixels <= 0 {
+        return Result<Coverage, Error>.failure(Error(
+            kind:ErrorKind.coverage_too_large,
+            detail:"font raster maximum_pixels must be positive"
+        ))
+    }
+    let physical_size_value = instance.size() * options.density * 64.0
+    if !Math.is_finite(physical_size_value) ||
+        physical_size_value < 1.0 || physical_size_value > 1048576.0 {
+        return Result<Coverage, Error>.failure(Error(
+            kind:ErrorKind.invalid_density,
+            detail:"font raster physical size must fit the supported 1/64-pixel range"
+        ))
+    }
+    let physical_size = Math.round(physical_size_value) as int
+    let hinting = hinting_code(options.hinting)
+    let antialiasing = antialiasing_code(options.antialiasing)
+    let key = data.cache_key + "|density=$(options.density)|hint=$(hinting)|aa=$(antialiasing)|pad=$(options.padding)"
+    if cached = instance.cached_coverage(key) {
+        if cached.byte_count() > options.maximum_pixels {
+            return Result<Coverage, Error>.failure(Error(
+                kind:ErrorKind.coverage_too_large,
+                detail:"cached font coverage exceeds maximum_pixels"
+            ))
+        }
+        return Result<Coverage, Error>.success(cached)
+    }
+
+    var glyphs:Native.RasterGlyph[] = []
+    for glyph in data.glyphs {
+        let pixel_origin_x_value = glyph.origin_x * options.density
+        let pixel_origin_y_value = glyph.origin_y * options.density
+        if !Math.is_finite(pixel_origin_x_value) || !Math.is_finite(pixel_origin_y_value) ||
+            pixel_origin_x_value < -1000000000.0 || pixel_origin_x_value > 1000000000.0 ||
+            pixel_origin_y_value < -1000000000.0 || pixel_origin_y_value > 1000000000.0 {
+            return Result<Coverage, Error>.failure(Error(
+                kind:ErrorKind.coverage_too_large,
+                detail:"font raster placement exceeds the portable coordinate range"
+            ))
+        }
+        let pixel_origin_x = Math.round(pixel_origin_x_value) as int
+        let pixel_origin_y = Math.round(pixel_origin_y_value) as int
+        glyphs.append(Native.RasterGlyph(
+            id:glyph.id,
+            origin_x:pixel_origin_x,
+            origin_y:pixel_origin_y
+        ))
+    }
+
+    match Native.raster_coverage(
+        instance.native_handle(),
+        glyphs,
+        physical_size,
+        hinting,
+        antialiasing,
+        options.padding,
+        options.maximum_pixels
+    ) {
+        failure(error) => {
+            match error.kind {
+                invalid_input => {
+                    return Result<Coverage, Error>.failure(Error(
+                        kind:ErrorKind.coverage_too_large,
+                        detail:error.detail
+                    ))
+                }
+                else => { return Result<Coverage, Error>.failure(public_error(error)) }
+            }
+        }
+        success(native) => {
+            var bounds = Bounds(x:0.0, y:0.0, width:0.0, height:0.0)
+            if native.width > 0 && native.height > 0 {
+                let ink_width = native.width - options.padding * 2
+                let ink_height = native.height - options.padding * 2
+                bounds = Bounds(
+                    x:(native.origin_x + options.padding) as float64 / options.density,
+                    y:(native.origin_y - options.padding - ink_height) as float64 / options.density,
+                    width:ink_width as float64 / options.density,
+                    height:ink_height as float64 / options.density
+                )
+            }
+            let coverage = Coverage(
+                alpha:native.pixels,
+                width:native.width,
+                height:native.height,
+                stride:native.stride,
+                origin:PixelPosition(x:native.origin_x, y:native.origin_y),
+                baseline:native.origin_y,
+                bounds:bounds,
+                advance:data.metrics.advance,
+                density:options.density
+            )
+            instance.cache_coverage(key, coverage)
+            return Result<Coverage, Error>.success(coverage)
+        }
+    }
+}
+
+func hinting_code(hinting:Hinting) int {
+    return match hinting { none => 0; light => 1; normal => 2 }
+}
+
+func antialiasing_code(antialiasing:Antialiasing) int {
+    return match antialiasing { grayscale => 0; monochrome => 1 }
 }
 
 func normalized_outline(glyph_id:uint32, data:Native.OutlineData, units_per_em:int) GlyphOutline {
@@ -773,7 +1002,7 @@ func validated_shape(text:str, options:ShapeOptions) Result<ValidatedShape, Erro
     ))
 }
 
-func glyph_run_data(instance:Instance, text:str, shaped:Native.ShapeData) GlyphRunData {
+func glyph_run_data(instance:Instance, cache_key:str, text:str, shaped:Native.ShapeData) GlyphRunData {
     let upem = instance.face().units_per_em() as float64
     let scale = instance.size() / upem
     var glyphs:Glyph[] = []
@@ -829,6 +1058,7 @@ func glyph_run_data(instance:Instance, text:str, shaped:Native.ShapeData) GlyphR
         )
     }
     return GlyphRunData(
+        cache_key:cache_key,
         text:text,
         direction:direction,
         script:shaped.script,

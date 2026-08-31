@@ -21,18 +21,251 @@ func exercise_native_lifetimes() {
     }
 }
 
-test "verify ABI v4 and release every native lifetime" {
-    assert(Native.abi_version_value() == 4)
+test "verify ABI v5 and release every native lifetime" {
+    assert(Native.abi_version_value() == 5)
     assert(Native.abi_pointer_size_value() == 8)
     assert(Native.abi_size_size_value() == 8)
     assert(Native.abi_pointer_alignment_value() == 8)
     assert(Native.live_library_count() == 0)
     assert(Native.live_face_count() == 0)
     assert(Native.live_instance_count() == 0)
+    assert(Native.live_bitmap_count() == 0)
+    assert(Native.live_coverage_count() == 0)
     exercise_native_lifetimes()
     assert(Native.live_library_count() == 0)
     assert(Native.live_face_count() == 0)
     assert(Native.live_instance_count() == 0)
+    assert(Native.live_bitmap_count() == 0)
+    assert(Native.live_coverage_count() == 0)
+}
+
+test "raster cache reuses physical glyphs across runs and releases transient handles" {
+    match Font.Face.monospace() {
+        failure(error) => { panic(error.detail) }
+        success(face) => {
+            match Font.Instance.create(face, size:14.0) {
+                failure(error) => { panic(error.detail) }
+                success(instance) => {
+                    var first = require_run(instance, "terminal terminal", Font.ShapeOptions())
+                    match first.rasterize() {
+                        failure(error) => { panic(error.detail) }
+                        success(coverage) => { assert(!coverage.is_empty()) }
+                    }
+                    let after_cold = face.native_bitmap_rasterization_count()
+                    assert(after_cold > 0)
+                    assert(after_cold < first.glyph_count())
+                    assert(Native.live_bitmap_count() == 0)
+                    assert(Native.live_coverage_count() == 0)
+                    match first.rasterize() {
+                        failure(error) => { panic(error.detail) }
+                        success(coverage) => { assert(!coverage.is_empty()) }
+                    }
+                    assert(face.native_bitmap_rasterization_count() == after_cold)
+                    var second = require_run(instance, "later terminal", Font.ShapeOptions())
+                    match second.rasterize() {
+                        failure(error) => { panic(error.detail) }
+                        success(coverage) => { assert(!coverage.is_empty()) }
+                    }
+                    assert(face.native_bitmap_rasterization_count() <= after_cold + 2)
+                    assert(instance.coverage_cache_byte_count() <= 8388608)
+                    assert(face.native_bitmap_cache_byte_count() <= 16777216)
+                    assert(Native.live_bitmap_count() == 0)
+                    assert(Native.live_coverage_count() == 0)
+                }
+            }
+        }
+    }
+}
+
+test "native face shares cached coverage source across immutable instances" {
+    match Font.Face.monospace() {
+        failure(error) => { panic(error.detail) }
+        success(face) => {
+            match Font.Instance.create(face, size:14.0) {
+                failure(error) => { panic(error.detail) }
+                success(first) => {
+                    var run = require_run(first, "cache", Font.ShapeOptions())
+                    match run.rasterize() { failure(error) => { panic(error.detail) }; success(coverage) => {} }
+                    let after_first = face.native_bitmap_rasterization_count()
+                    match Font.Instance.create(face, size:14.0) {
+                        failure(error) => { panic(error.detail) }
+                        success(second) => {
+                            var repeated = require_run(second, "cache", Font.ShapeOptions())
+                            match repeated.rasterize() { failure(error) => { panic(error.detail) }; success(coverage) => {} }
+                            assert(face.native_bitmap_rasterization_count() == after_first)
+                            assert(Native.live_bitmap_count() == 0)
+                            assert(Native.live_coverage_count() == 0)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+test "run coverage composes the glyph IDs produced by shaping" {
+    match Font.Face.decode(embed_bytes("Fixtures/Minimal.ttf")) {
+        failure(error) => { panic(error.detail) }
+        success(face) => {
+            match Font.Instance.create(face, size:17.0) {
+                failure(error) => { panic(error.detail) }
+                success(instance) => {
+                    var single = require_run(instance, "A", Font.ShapeOptions())
+                    var pair = require_run(instance, "AA", Font.ShapeOptions())
+                    assert(pair.glyphs()[0].id == single.glyphs()[0].id)
+                    assert(pair.glyphs()[1].id == single.glyphs()[0].id)
+                    match Native.raster_glyph(instance.native_handle(), single.glyphs()[0].id, 17 * 64, 2, 0) {
+                        failure(error) => { panic(error.detail) }
+                        success(bitmap) => {
+                            if value = bitmap {
+                                var glyph_sum = 0
+                                for alpha in value.pixels { glyph_sum += alpha as int }
+                                match pair.rasterize() {
+                                    failure(error) => { panic(error.detail) }
+                                    success(coverage) => {
+                                        var run_sum = 0
+                                        for alpha in coverage.alpha { run_sum += alpha as int }
+                                        assert(run_sum == glyph_sum * 2)
+                                    }
+                                }
+                            } else { panic("A has no raster coverage") }
+                        }
+                    }
+                    assert(face.native_bitmap_rasterization_count() == 1)
+                    assert(Native.live_bitmap_count() == 0)
+                    assert(Native.live_coverage_count() == 0)
+                }
+            }
+        }
+    }
+}
+
+test "coverage allocation rejection releases transient native handles" {
+    match Font.Face.monospace() {
+        failure(error) => { panic(error.detail) }
+        success(face) => {
+            match Font.Instance.create(face, size:14.0) {
+                failure(error) => { panic(error.detail) }
+                success(instance) => {
+                    var run = require_run(instance, "this coverage cannot fit in one pixel", Font.ShapeOptions())
+                    match run.rasterize(Font.RasterOptions(maximum_pixels:1)) {
+                        success(coverage) => { panic("coverage limit was ignored") }
+                        failure(error) => {
+                            match error.kind {
+                                coverage_too_large => {}
+                                else => { panic(error.detail) }
+                            }
+                        }
+                    }
+                    assert(Native.live_bitmap_count() == 0)
+                    assert(Native.live_coverage_count() == 0)
+                }
+            }
+        }
+    }
+}
+
+test "glyph cache evicts by bytes under a large-glyph churn" {
+    match Font.Face.monospace() {
+        failure(error) => { panic(error.detail) }
+        success(face) => {
+            match Font.Instance.create(face, size:1000.0) {
+                failure(error) => { panic(error.detail) }
+                success(instance) => {
+                    var run = require_run(
+                        instance,
+                        " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~",
+                        Font.ShapeOptions()
+                    )
+                    for glyph in run.glyphs() {
+                        match Native.raster_glyph(instance.native_handle(), glyph.id, 1000 * 64, 2, 0) {
+                            failure(error) => { panic(error.detail) }
+                            success(bitmap) => {}
+                        }
+                        assert(face.native_bitmap_cache_byte_count() <= 16777216)
+                    }
+                    assert(face.native_bitmap_rasterization_count() > 80)
+                    assert(face.native_bitmap_cache_entry_count() < run.glyph_count())
+                    assert(Native.live_bitmap_count() == 0)
+                    assert(Native.live_coverage_count() == 0)
+                }
+            }
+        }
+    }
+}
+
+test "run coverage cache evicts historical terminal lines by bytes" {
+    match Font.Face.monospace() {
+        failure(error) => { panic(error.detail) }
+        success(face) => {
+            match Font.Instance.create(face, size:14.0) {
+                failure(error) => { panic(error.detail) }
+                success(instance) => {
+                    var line = 0
+                    while line < 600 {
+                        var text = "terminal row $(line) "
+                        while text.count() < 200 {
+                            text = text + "0123456789abcdef"
+                        }
+                        var run = require_run(instance, text, Font.ShapeOptions())
+                        match run.rasterize() {
+                            failure(error) => { panic(error.detail) }
+                            success(coverage) => { assert(!coverage.is_empty()) }
+                        }
+                        assert(instance.coverage_cache_byte_count() <= 8388608)
+                        line++
+                    }
+                    assert(instance.coverage_cache_entry_count() < 600)
+                    assert(Native.live_coverage_count() == 0)
+                }
+            }
+        }
+    }
+}
+
+struct RasterReadJob:Threading.Job {
+    var face:Font.Face
+    var checksum:int
+
+    func execute() {
+        var total = 0
+        match Font.Instance.create(self.face, size:14.0) {
+            failure(error) => { panic(error.detail) }
+            success(instance) => {
+                var run = require_run(instance, "concurrent terminal 0123456789", Font.ShapeOptions())
+                for iteration in 0...25 {
+                    match run.rasterize() {
+                        failure(error) => { panic(error.detail) }
+                        success(coverage) => { total += coverage.byte_count() }
+                    }
+                }
+            }
+        }
+        self.checksum = total
+    }
+}
+
+test "shared face bitmap cache supports concurrent immutable instances" {
+    match Font.Face.monospace() {
+        failure(error) => { panic(error.detail) }
+        success(face) => {
+            var executor = Threading.Executor(worker_count:4)
+            var first = executor.submit(RasterReadJob(face:face, checksum:0))
+            var second = executor.submit(RasterReadJob(face:face, checksum:0))
+            var third = executor.submit(RasterReadJob(face:face, checksum:0))
+            var fourth = executor.submit(RasterReadJob(face:face, checksum:0))
+            var one = first.complete()
+            var two = second.complete()
+            var three = third.complete()
+            var four = fourth.complete()
+            assert(one.checksum > 0)
+            assert(one.checksum == two.checksum)
+            assert(two.checksum == three.checksum)
+            assert(three.checksum == four.checksum)
+            assert(Native.live_bitmap_count() == 0)
+            assert(Native.live_coverage_count() == 0)
+        }
+    }
 }
 
 test "outline cache ignores logical size and releases transient handles" {

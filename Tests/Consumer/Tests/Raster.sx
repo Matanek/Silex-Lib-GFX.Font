@@ -1,0 +1,249 @@
+use GFX.Font
+use STD.Crypto
+use STD.Math
+
+func require_raster_face(result:Result<Font.Face, Font.Error>) Font.Face {
+    match result {
+        failure(error) => { panic(error.detail) }
+        success(face) => { return face }
+    }
+}
+
+func require_raster_instance(
+    result:Result<Font.Instance, Font.Error>
+) Font.Instance {
+    match result {
+        failure(error) => { panic(error.detail) }
+        success(instance) => { return instance }
+    }
+}
+
+func require_raster_run(
+    result:Result<Font.GlyphRun, Font.Error>
+) Font.GlyphRun {
+    match result {
+        failure(error) => { panic(error.detail) }
+        success(run) => { return run }
+    }
+}
+
+func require_coverage(
+    result:Result<Font.Coverage, Font.Error>
+) Font.Coverage {
+    match result {
+        failure(error) => { panic(error.detail) }
+        success(coverage) => { return coverage }
+    }
+}
+
+func coverage_digest(coverage:Font.Coverage) str {
+    if coverage.alpha.count() == 0 {
+        return "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+    return Crypto.sha256(@coverage.alpha[0:coverage.alpha.count()])
+}
+
+test "hinted grayscale coverage preserves logical metrics and physical density" {
+    var face = require_raster_face(Font.Face.monospace())
+    var instance = require_raster_instance(Font.Instance.create(face, size:14.0))
+    var run = require_raster_run(instance.shape("Terminal 0123"))
+    let one = require_coverage(run.rasterize(Font.RasterOptions(density:1.0, padding:2)))
+    let two = require_coverage(run.rasterize(Font.RasterOptions(density:2.0, padding:4)))
+    assert(!one.is_empty())
+    assert(!two.is_empty())
+    assert(one.stride == one.width)
+    assert(two.stride == two.width)
+    assert(one.alpha.count() == one.width * one.height)
+    assert(two.alpha.count() == two.width * two.height)
+    assert(two.width >= one.width * 2 - 4)
+    assert(two.height >= one.height * 2 - 4)
+    assert(two.advance.x == one.advance.x)
+    assert(two.advance.y == one.advance.y)
+    assert(Math.abs(two.bounds.width - one.bounds.width) < 2.0)
+    assert(one.baseline == one.origin.y)
+    assert(two.baseline == two.origin.y)
+}
+
+test "padding expands only the physical allocation around the same ink" {
+    var face = require_raster_face(Font.Face.decode(embed_bytes("../../Fixtures/Minimal.ttf")))
+    var instance = require_raster_instance(Font.Instance.create(face, size:18.0))
+    var run = require_raster_run(instance.shape("Ag"))
+    let tight = require_coverage(run.rasterize(Font.RasterOptions(padding:0)))
+    let padded = require_coverage(run.rasterize(Font.RasterOptions(padding:3)))
+    assert(padded.width == tight.width + 6)
+    assert(padded.height == tight.height + 6)
+    assert(padded.origin.x == tight.origin.x - 3)
+    assert(padded.origin.y == tight.origin.y + 3)
+    assert(padded.bounds.x == tight.bounds.x)
+    assert(padded.bounds.y == tight.bounds.y)
+    assert(padded.bounds.width == tight.bounds.width)
+    assert(padded.bounds.height == tight.bounds.height)
+    assert(padded.advance.x == tight.advance.x)
+}
+
+test "empty text and spaces retain advance without inventing ink" {
+    var face = require_raster_face(Font.Face.monospace())
+    var instance = require_raster_instance(Font.Instance.create(face, size:13.0))
+    let empty = require_coverage(require_raster_run(instance.shape("")).rasterize())
+    let spaces = require_coverage(require_raster_run(instance.shape("   ")).rasterize())
+    assert(empty.is_empty())
+    assert(empty.alpha.count() == 0)
+    assert(empty.advance.x == 0.0)
+    assert(spaces.is_empty())
+    assert(spaces.alpha.count() == 0)
+    assert(spaces.advance.x > 0.0)
+}
+
+test "monochrome coverage is binary while grayscale retains intermediate alpha" {
+    var face = require_raster_face(Font.Face.decode(embed_bytes("../../Fixtures/Minimal.ttf")))
+    var instance = require_raster_instance(Font.Instance.create(face, size:17.0))
+    var run = require_raster_run(instance.shape("Silex"))
+    let gray = require_coverage(run.rasterize(Font.RasterOptions(
+        hinting:Font.Hinting.normal,
+        antialiasing:Font.Antialiasing.grayscale
+    )))
+    let mono = require_coverage(run.rasterize(Font.RasterOptions(
+        hinting:Font.Hinting.normal,
+        antialiasing:Font.Antialiasing.monochrome
+    )))
+    var gray_has_partial = false
+    for alpha in gray.alpha {
+        if alpha > 0 && alpha < 255 { gray_has_partial = true }
+    }
+    assert(gray_has_partial)
+    for alpha in mono.alpha {
+        assert(alpha == 0 || alpha == 255)
+    }
+    assert(coverage_digest(gray) != coverage_digest(mono))
+}
+
+test "hinting modes remain distinct and deterministic at UI size" {
+    var face = require_raster_face(Font.Face.monospace())
+    var instance = require_raster_instance(Font.Instance.create(face, size:13.0))
+    var run = require_raster_run(instance.shape("Il1O0"))
+    let unhinted = require_coverage(run.rasterize(Font.RasterOptions(hinting:Font.Hinting.none)))
+    let light = require_coverage(run.rasterize(Font.RasterOptions(hinting:Font.Hinting.light)))
+    let normal = require_coverage(run.rasterize(Font.RasterOptions(hinting:Font.Hinting.normal)))
+    assert(coverage_digest(unhinted) != coverage_digest(normal))
+    assert(coverage_digest(light) != coverage_digest(normal))
+    assert(coverage_digest(require_coverage(run.rasterize(
+        Font.RasterOptions(hinting:Font.Hinting.normal)
+    ))) == coverage_digest(normal))
+}
+
+test "ligatures combining marks and RTL use the shaped glyph stream" {
+    var latin_face = require_raster_face(Font.Face.default())
+    var latin = require_raster_instance(Font.Instance.create(latin_face, size:20.0))
+    var ligature = require_raster_run(latin.shape("office", Font.ShapeOptions(
+        direction:Font.Direction.left_to_right,
+        script:"Latn",
+        language:"en",
+        features:[Font.Feature("liga", 1)]
+    )))
+    var mark = require_raster_run(latin.shape("e\u{301}"))
+    assert(ligature.glyph_count() < 6)
+    assert(!require_coverage(ligature.rasterize()).is_empty())
+    assert(mark.glyph_count() >= 1)
+    assert(!require_coverage(mark.rasterize()).is_empty())
+
+    var arabic_face = require_raster_face(Font.Face.decode(
+        embed_bytes("../../Fixtures/NotoSansArabic-Test.ttf")
+    ))
+    var arabic = require_raster_instance(Font.Instance.create(arabic_face, size:20.0))
+    var rtl = require_raster_run(arabic.shape("سلام", Font.ShapeOptions(
+        direction:Font.Direction.right_to_left,
+        script:"Arab",
+        language:"ar"
+    )))
+    let coverage = require_coverage(rtl.rasterize())
+    assert(!coverage.is_empty())
+    assert(coverage.advance.x > 0.0)
+}
+
+test "pinned FreeType masks remain byte-exact for Latin marks and RTL" {
+    var latin_face = require_raster_face(Font.Face.decode(embed_bytes("../../Fixtures/Minimal.ttf")))
+    var latin = require_raster_instance(Font.Instance.create(latin_face, size:17.0))
+    let latin_coverage = require_coverage(
+        require_raster_run(latin.shape("Ag office")).rasterize()
+    )
+    let mark_coverage = require_coverage(
+        require_raster_run(latin.shape("e\u{301}")).rasterize()
+    )
+    assert(latin_coverage.width == 69)
+    assert(latin_coverage.height == 18)
+    assert(latin_coverage.origin.x == 0)
+    assert(latin_coverage.origin.y == 14)
+    assert(coverage_digest(latin_coverage) == "ae337b61e072923d46bc5818eda2b60ada017dae24ff287b33236fbb30bff68f")
+    assert(mark_coverage.width == 8)
+    assert(mark_coverage.height == 9)
+    assert(coverage_digest(mark_coverage) == "c82adc50076ba0649b7ead6f7d460b6ef6f7515abf1bbc8507570b015e20f48f")
+    let negative = require_coverage(require_raster_run(latin.shape("j")).rasterize())
+    assert(negative.origin.x == -1)
+    assert(negative.bounds.x < 0.0)
+    assert(negative.width == 5)
+    assert(negative.height == 16)
+    assert(coverage_digest(negative) == "fb154118ff0267649e66411c1f2ef82d354be0010c78b2872fbdff6736a1dd35")
+    let below = require_coverage(require_raster_run(latin.shape("_")).rasterize())
+    assert(below.baseline == 0)
+    assert(below.bounds.y < 0.0)
+    assert(below.width == 8)
+    assert(below.height == 3)
+    assert(coverage_digest(below) == "3c73854059129d2c782635b2cf76ecf070b64e1775c2c6f7bb64211ef212e085")
+
+    var arabic_face = require_raster_face(Font.Face.decode(
+        embed_bytes("../../Fixtures/NotoSansArabic-Test.ttf")
+    ))
+    var arabic = require_raster_instance(Font.Instance.create(arabic_face, size:20.0))
+    let rtl = require_coverage(require_raster_run(arabic.shape("سلام", Font.ShapeOptions(
+        direction:Font.Direction.right_to_left,
+        script:"Arab",
+        language:"ar"
+    ))).rasterize())
+    assert(rtl.width == 14)
+    assert(rtl.height == 15)
+    assert(rtl.origin.x == 12)
+    assert(rtl.origin.y == 15)
+    assert(coverage_digest(rtl) == "41e9153cef32c34426c4ef1e826c2eb2228adf6529284a3b57ea483ea43f158e")
+}
+
+test "single glyph coverage matches the independent FreeType 2.14.3 oracle" {
+    var face = require_raster_face(Font.Face.decode(embed_bytes("../../Fixtures/Minimal.ttf")))
+    var instance = require_raster_instance(Font.Instance.create(face, size:17.0))
+    let coverage = require_coverage(require_raster_run(instance.shape("A")).rasterize())
+    var sum = 0
+    var weighted = 0
+    var index = 0
+    for alpha in coverage.alpha {
+        sum += alpha as int
+        weighted += alpha as int * (index + 1)
+        index++
+    }
+    assert(coverage.width == 11)
+    assert(coverage.height == 12)
+    assert(coverage.origin.x == 0)
+    assert(coverage.origin.y == 12)
+    assert(sum == 10200)
+    assert(weighted == 737440)
+}
+
+test "invalid density padding and allocation limits return typed errors" {
+    var face = require_raster_face(Font.Face.monospace())
+    var instance = require_raster_instance(Font.Instance.create(face, size:14.0))
+    var run = require_raster_run(instance.shape("bounded"))
+    match run.rasterize(Font.RasterOptions(density:0.0)) {
+        success(coverage) => { panic("zero density was accepted") }
+        failure(error) => { match error.kind { invalid_density => {}; else => { panic(error.detail) } } }
+    }
+    match run.rasterize(Font.RasterOptions(density:1.0e300)) {
+        success(coverage) => { panic("overflowing density was accepted") }
+        failure(error) => { match error.kind { invalid_density => {}; else => { panic(error.detail) } } }
+    }
+    match run.rasterize(Font.RasterOptions(padding:-1)) {
+        success(coverage) => { panic("negative padding was accepted") }
+        failure(error) => { match error.kind { invalid_padding => {}; else => { panic(error.detail) } } }
+    }
+    match run.rasterize(Font.RasterOptions(maximum_pixels:1)) {
+        success(coverage) => { panic("one-pixel allocation limit was ignored") }
+        failure(error) => { match error.kind { coverage_too_large => {}; else => { panic(error.detail) } } }
+    }
+}
