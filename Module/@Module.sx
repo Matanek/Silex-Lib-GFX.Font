@@ -422,24 +422,38 @@ struct OutlineCacheEntry { let glyph_id:uint32; let outline:GlyphOutline? }
 
 class OutlineCache {
     private var entries:OutlineCacheEntry[] = []
-    private var cursor:int = 0
+    private var slots:int[]
+
+    init() {
+        self.slots = outline_cache_slots(512)
+    }
 
     func find(glyph_id:uint32) OutlineCacheEntry? {
-        for entry in self.entries {
-            if entry.glyph_id == glyph_id { return entry }
+        let slot = (glyph_id as uint % self.slots.count() as uint) as int
+        let index = self.slots[slot]
+        if index >= 0 && self.entries[index].glyph_id == glyph_id {
+            return self.entries[index]
         }
         return null
     }
 
     func insert(glyph_id:uint32, outline:GlyphOutline?) {
         let entry = OutlineCacheEntry(glyph_id:glyph_id, outline:outline)
-        if self.entries.count() < 512 {
-            self.entries.append(entry)
-        } else {
-            self.entries[self.cursor] = entry
-            self.cursor = (self.cursor + 1) % 512
+        let slot = (glyph_id as uint % self.slots.count() as uint) as int
+        let index = self.slots[slot]
+        if index >= 0 {
+            self.entries.replace(index, entry)
+            return
         }
+        self.slots.replace(slot, self.entries.count())
+        self.entries.append(entry)
     }
+}
+
+func outline_cache_slots(count:int) int[] {
+    var result:int[] = []
+    while result.count() < count { result.append(-1) }
+    return result
 }
 
 struct CoverageCacheEntry { let key:str; let coverage:Coverage; let byte_count:int }
