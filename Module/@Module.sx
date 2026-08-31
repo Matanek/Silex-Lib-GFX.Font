@@ -1222,7 +1222,11 @@ func validated_shape(text:str, options:ShapeOptions) Result<ValidatedShape, Erro
 
     let direction = direction_code(options.direction)
     var native_features:Native.ShapeFeature[] = []
-    var key = Crypto.sha256(@text_bytes[0:text_bytes.count()]) + "|d=$(direction)|s=$(script)|l=$(language)"
+    // This key never crosses a trust boundary: retaining the text with its
+    // byte length is collision-free and avoids a cryptographic digest on every
+    // cold line shaped by editors and terminals.
+    var key = "$(text_bytes.count()):" + text +
+        "|d=$(direction)|s=$(script)|l=$(language)"
     for feature in options.features {
         let tag_bytes = UTF8.bytes(feature.tag)
         if tag_bytes.count() != 4 || !printable_ascii(tag_bytes) {
