@@ -103,6 +103,57 @@ public struct Bounds {
     let height:float64
 }
 
+public enum FillRule { non_zero }
+
+public struct QuadraticCurve {
+    let control:Position
+    let endpoint:Position
+}
+
+public struct CubicCurve {
+    let control_1:Position
+    let control_2:Position
+    let endpoint:Position
+}
+
+public enum OutlineStep {
+    move_to(Position)
+    line_to(Position)
+    quadratic_to(QuadraticCurve)
+    cubic_to(CubicCurve)
+    close
+}
+
+public struct OutlineContour { let steps:OutlineStep[] }
+
+public struct GlyphOutline {
+    let glyph_id:uint32
+    let contours:OutlineContour[]
+    let bounds:Bounds
+    let advance:Position
+    let fill_rule:FillRule
+
+    func is_empty() bool { return self.contours.count() == 0 }
+}
+
+public struct OutlineTransform {
+    let xx:float64
+    let xy:float64
+    let yx:float64
+    let yy:float64
+    let dx:float64
+    let dy:float64
+}
+
+public struct PlacedOutline {
+    let glyph_id:uint32
+    let outline:GlyphOutline?
+    let origin:Position
+    let offset:Position
+    let cluster:Cluster
+    let transform:OutlineTransform
+}
+
 public enum Direction {
     left_to_right
     right_to_left
@@ -221,6 +272,30 @@ class ShapeCache {
         } else {
             self.entries[self.cursor] = entry
             self.cursor = (self.cursor + 1) % 64
+        }
+    }
+}
+
+struct OutlineCacheEntry { let glyph_id:uint32; let outline:GlyphOutline? }
+
+class OutlineCache {
+    private var entries:OutlineCacheEntry[] = []
+    private var cursor:int = 0
+
+    func find(glyph_id:uint32) OutlineCacheEntry? {
+        for entry in self.entries {
+            if entry.glyph_id == glyph_id { return entry }
+        }
+        return null
+    }
+
+    func insert(glyph_id:uint32, outline:GlyphOutline?) {
+        let entry = OutlineCacheEntry(glyph_id:glyph_id, outline:outline)
+        if self.entries.count() < 512 {
+            self.entries.append(entry)
+        } else {
+            self.entries[self.cursor] = entry
+            self.cursor = (self.cursor + 1) % 512
         }
     }
 }
@@ -369,6 +444,9 @@ public class Face {
     }
 
     package func native_handle() uint { return self.face_handle }
+    package func native_outline_decomposition_count() int {
+        return Native.face_outline_decomposition_count(self.face_handle)
+    }
 }
 
 public class Instance {
@@ -379,6 +457,7 @@ public class Instance {
     private let requested_synthesis:Synthesis
     private let stable_identity:str
     private var shaping_cache:ShapeCache
+    private var outline_cache:OutlineCache
 
     private init(
         face:Face,
@@ -395,6 +474,7 @@ public class Instance {
         self.requested_synthesis = synthesis
         self.stable_identity = identity
         self.shaping_cache = ShapeCache()
+        self.outline_cache = OutlineCache()
     }
 
     drop {
@@ -475,6 +555,28 @@ public class Instance {
         return null
     }
 
+    func outline(glyph_id:uint32) Result<GlyphOutline?, Error> {
+        if cached = self.outline_cache.find(glyph_id) {
+            return Result<GlyphOutline?, Error>.success(cached.outline)
+        }
+        match Native.outline(self.instance_handle, glyph_id) {
+            failure(error) => { return Result<GlyphOutline?, Error>.failure(public_error(error)) }
+            success(data) => {
+                if value = data {
+                    let outline = normalized_outline(
+                        glyph_id,
+                        value,
+                        self.face_value.units_per_em()
+                    )
+                    self.outline_cache.insert(glyph_id, outline)
+                    return Result<GlyphOutline?, Error>.success(outline)
+                }
+                self.outline_cache.insert(glyph_id, null)
+                return Result<GlyphOutline?, Error>.success(null)
+            }
+        }
+    }
+
     func shape(text:str, options:ShapeOptions = ShapeOptions()) Result<GlyphRun, Error> {
         match validated_shape(text, options) {
             failure(error) => { return Result<GlyphRun, Error>.failure(error) }
@@ -530,6 +632,69 @@ public class GlyphRun {
         }
         return count
     }
+
+    func outlines() Result<PlacedOutline[], Error> {
+        var result:PlacedOutline[] = []
+        let size = self.instance_value.size()
+        for glyph in self.data.glyphs {
+            match self.instance_value.outline(glyph.id) {
+                failure(error) => { return Result<PlacedOutline[], Error>.failure(error) }
+                success(outline) => {
+                    result.append(PlacedOutline(
+                        glyph_id:glyph.id,
+                        outline:outline,
+                        origin:glyph.origin(),
+                        offset:glyph.offset(),
+                        cluster:glyph.cluster(),
+                        transform:OutlineTransform(
+                            xx:size,
+                            xy:0.0,
+                            yx:0.0,
+                            yy:size,
+                            dx:glyph.origin_x,
+                            dy:glyph.origin_y
+                        )
+                    ))
+                }
+            }
+        }
+        return Result<PlacedOutline[], Error>.success(result)
+    }
+}
+
+func normalized_outline(glyph_id:uint32, data:Native.OutlineData, units_per_em:int) GlyphOutline {
+    let scale = units_per_em as float64
+    var contours:OutlineContour[] = []
+    var current:OutlineStep[] = []
+    for step in data.steps {
+        let first = Position(x:step.x1 as float64 / scale, y:step.y1 as float64 / scale)
+        let second = Position(x:step.x2 as float64 / scale, y:step.y2 as float64 / scale)
+        let third = Position(x:step.x3 as float64 / scale, y:step.y3 as float64 / scale)
+        if step.kind == 1 { current.append(OutlineStep.move_to(first)) }
+        if step.kind == 2 { current.append(OutlineStep.line_to(first)) }
+        if step.kind == 3 { current.append(OutlineStep.quadratic_to(QuadraticCurve(control:first, endpoint:second))) }
+        if step.kind == 4 { current.append(OutlineStep.cubic_to(CubicCurve(control_1:first, control_2:second, endpoint:third))) }
+        if step.kind == 5 {
+            current.append(OutlineStep.close())
+            contours.append(OutlineContour(steps:current))
+            current = []
+        }
+    }
+    return GlyphOutline(
+        glyph_id:glyph_id,
+        contours:contours,
+        bounds:Bounds(
+            x:data.x_min as float64 / scale,
+            y:data.y_min as float64 / scale,
+            width:(data.x_max - data.x_min) as float64 / scale,
+            height:(data.y_max - data.y_min) as float64 / scale
+        ),
+        advance:Position(
+            x:data.x_advance as float64 / scale,
+            y:data.y_advance as float64 / scale
+        ),
+        fill_rule:FillRule.non_zero()
+    )
 }
 
 func validated_shape(text:str, options:ShapeOptions) Result<ValidatedShape, Error> {

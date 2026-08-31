@@ -1,0 +1,27 @@
+use GFX.Font
+
+func main() {
+    match Font.Face.default() {
+        failure(error) => { panic(error.detail) }
+        success(face) => {
+            match Font.Instance.create(face, size:18.0, variations:[Font.Variation("wght", 560.0)]) {
+                failure(error) => { panic(error.detail) }
+                success(instance) => {
+                    match instance.shape("Bé") {
+                        failure(error) => { panic(error.detail) }
+                        success(run) => {
+                            match run.outlines() {
+                                failure(error) => { panic(error.detail) }
+                                success(placed) => {
+                                    assert(placed.count() == run.glyph_count())
+                                    assert(placed[0].outline != null)
+                                    assert(placed[1].outline != null)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

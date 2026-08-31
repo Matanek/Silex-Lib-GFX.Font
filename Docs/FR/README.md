@@ -158,6 +158,49 @@ multi-face, la césure, la justification et le wrapping restent la
 responsabilité d’une future couche de paragraphe. L’appelant segmente ces cas
 en runs homogènes et peut composer leurs résultats.
 
+## Extraire les contours vectoriels
+
+`Instance.outline(glyph_id:)` retourne un contour dans l’espace em, avec la
+baseline pour origine et l’axe Y positif vers le haut. Les commandes
+`move_to`, `line_to`, `quadratic_to`, `cubic_to` et `close` conservent les
+courbes TrueType ou CFF d’origine. Les contours composites sont déjà résolus,
+chaque variante porte seulement les points qui lui sont utiles, les bornes sont
+analytiques, l’avance nominale est accessible, et `fill_rule` vaut
+explicitement `non_zero` afin que les contreformes restent des trous.
+
+```sx
+match instance.shape("Bé") {
+    failure(error) => { print(error.detail) }
+    success(run) => {
+        match run.outlines() {
+            failure(error) => { print(error.detail) }
+            success(placed) => {
+                for glyph in placed {
+                    if outline = glyph.outline {
+                        print("$(glyph.glyph_id): $(outline.contours.count()) contours")
+                    }
+                }
+            }
+        }
+    }
+}
+```
+
+Le `Result` distingue une erreur d’extraction d’un contour indisponible. Dans
+un résultat valide, `null` signifie que le glyphe n’a pas de représentation
+vectorielle ; un `GlyphOutline` présent mais vide représente au contraire un
+glyphe vectoriel sans encre, comme une espace. `GlyphRun.outlines()` conserve
+pour chaque glyphe façonné son identifiant, son origine, son cluster et une
+transformation em-vers-unités-logiques.
+
+La décomposition est mise en cache par face, identifiant de glyphe et
+coordonnées de variation. La taille logique n’entre pas dans cette clé : deux
+instances de 12 et 48 unités partagent le même contour normalisé. Chaque
+instance conserve en plus jusqu’à 512 valeurs publiques afin que les glyphes
+répétés d’un run ne recopient pas leurs points. Le package ne tesselle pas ces
+chemins et n’importe ni Canvas ni API GPU ; ces décisions appartiennent aux
+consommateurs GFX.
+
 ## Utiliser les fontes distribuées
 
 `Face.default()` charge Noto Sans variable et `Face.monospace()` charge Noto
@@ -171,13 +214,13 @@ explicites.
 
 ## Frontière native
 
-L’ABI privée v3 est distribuée pour macOS ARM64, Linux x64, Windows x64 et
+L’ABI privée v4 est distribuée pour macOS ARM64, Linux x64, Windows x64 et
 Windows ARM64. Une face possède ses octets et les vues FreeType/HarfBuzz
-correspondantes. Chaque instance possède son propre état HarfBuzz de variation ;
-les lectures répétées d’une face ne modifient donc pas une taille ou des
-coordonnées partagées. Le protocole de shaping copie glyphes, clusters,
-positions et extents avant de détruire son buffer HarfBuzz. Aucun handle ni
-type natif ne traverse l’API publique.
+correspondantes. Chaque instance possède son propre état HarfBuzz de variation.
+L’extraction applique les mêmes coordonnées à FreeType sous verrou, puis met en
+cache une décomposition immuable indépendante de la taille. Le protocole de
+shaping copie glyphes, clusters, positions et extents avant de détruire son
+buffer HarfBuzz. Aucun handle ni type natif ne traverse l’API publique.
 
 Windows ARM64 reste une cible reconnue et expérimentale : l’archive et la
 liaison fournissent une preuve structurelle, pas une exécution native.

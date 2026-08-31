@@ -154,6 +154,46 @@ fallback, hyphenation, justification, and width wrapping remain responsibilities
 of a future paragraph layer. Callers segment those cases into homogeneous runs
 and compose their results.
 
+## Extract vector outlines
+
+`Instance.outline(glyph_id:)` returns an outline in em space, with the baseline
+as origin and a Y-up axis. The `move_to`, `line_to`, `quadratic_to`,
+`cubic_to`, and `close` commands preserve the original TrueType or CFF curves.
+Each variant carries only the points it needs. Composite outlines are already
+resolved, bounds are analytic, nominal advance is available, and `fill_rule`
+is explicitly `non_zero` so counters remain holes.
+
+```sx
+match instance.shape("Bé") {
+    failure(error) => { print(error.detail) }
+    success(run) => {
+        match run.outlines() {
+            failure(error) => { print(error.detail) }
+            success(placed) => {
+                for glyph in placed {
+                    if outline = glyph.outline {
+                        print("$(glyph.glyph_id): $(outline.contours.count()) contours")
+                    }
+                }
+            }
+        }
+    }
+}
+```
+
+The `Result` distinguishes extraction failure from an unavailable outline. In
+a valid result, `null` means the glyph has no vector representation, whereas a
+present but empty `GlyphOutline` represents a vector glyph with no ink, such as
+a space. `GlyphRun.outlines()` preserves each shaped glyph ID, origin, cluster,
+and em-to-logical transform.
+
+Decomposition is cached by face, glyph ID, and variation coordinates. Logical
+size is not part of that key: 12-unit and 48-unit instances share the same
+normalized outline. Each instance also retains up to 512 public values so
+repeated glyphs in a run do not copy their points again. The package neither
+tessellates these paths nor imports a Canvas or GPU API; those decisions belong
+to GFX consumers.
+
 ## Use bundled fonts
 
 `Face.default()` loads variable Noto Sans and `Face.monospace()` loads Noto Sans
@@ -166,12 +206,13 @@ compose their faces from assets and explicit paths.
 
 ## Native boundary
 
-Private ABI v3 is distributed for macOS ARM64, Linux x64, Windows x64, and
+Private ABI v4 is distributed for macOS ARM64, Linux x64, Windows x64, and
 Windows ARM64. A face owns its bytes and the corresponding FreeType/HarfBuzz
-views. Every instance owns separate HarfBuzz variation state, so repeated face
-reads do not mutate shared size or coordinates. The shaping protocol copies
-glyphs, clusters, positions, and extents before destroying its HarfBuzz buffer.
-No native handle or type crosses the public API.
+views. Every instance owns separate HarfBuzz variation state. Outline
+extraction applies the same coordinates to FreeType under a lock, then caches
+an immutable decomposition that is independent from logical size. The shaping
+protocol copies glyphs, clusters, positions, and extents before destroying its
+HarfBuzz buffer. No native handle or type crosses the public API.
 
 Windows ARM64 remains a recognized experimental target: its archive and link
 provide structural evidence, not native execution.

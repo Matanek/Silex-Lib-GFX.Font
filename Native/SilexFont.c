@@ -8,8 +8,10 @@
 
 #include <ft2build.h>
 #include FT_FREETYPE_H
+#include FT_BBOX_H
 #include FT_FONT_FORMATS_H
 #include FT_MULTIPLE_MASTERS_H
+#include FT_OUTLINE_H
 #include FT_TRUETYPE_TABLES_H
 #include <hb.h>
 #include <hb-ot.h>
@@ -24,6 +26,26 @@
 #define FACE_MAGIC UINT32_C(0x53464643)
 #define INSTANCE_MAGIC UINT32_C(0x5346494e)
 #define SHAPE_MAGIC UINT32_C(0x53465348)
+#define OUTLINE_MAGIC UINT32_C(0x53464f4c)
+
+typedef struct FontOutlineStep {
+    int32_t kind;
+    int32_t coordinates[6];
+} FontOutlineStep;
+
+typedef struct FontOutlineEntry {
+    uint32_t glyph_id;
+    hb_variation_t *variations;
+    unsigned int variation_count;
+    FontOutlineStep *steps;
+    uint32_t step_count;
+    int32_t x_min;
+    int32_t y_min;
+    int32_t x_max;
+    int32_t y_max;
+    int32_t x_advance;
+    int32_t y_advance;
+} FontOutlineEntry;
 
 typedef struct FontLibrary { uint32_t magic; } FontLibrary;
 
@@ -36,6 +58,10 @@ typedef struct FontFace {
     hb_face_t *hb_face;
     int32_t index;
     int32_t count;
+    FontOutlineEntry **outlines;
+    uint32_t outline_count;
+    uint32_t outline_capacity;
+    uint32_t outline_decomposition_count;
 } FontFace;
 
 typedef struct FontInstance {
@@ -44,7 +70,13 @@ typedef struct FontInstance {
     hb_variation_t *variations;
     unsigned int variation_count;
     uint32_t shape_count;
+    FontFace *face;
 } FontInstance;
+
+typedef struct FontOutline {
+    uint32_t magic;
+    const FontOutlineEntry *entry;
+} FontOutline;
 
 typedef struct FontGlyphRecord {
     uint32_t id;
@@ -88,6 +120,7 @@ typedef struct FontState {
     uint32_t libraries;
     uint32_t faces;
     uint32_t instances;
+    uint32_t outlines;
 } FontState;
 
 static FontState state;
@@ -95,6 +128,7 @@ static atomic_flag state_guard = ATOMIC_FLAG_INIT;
 static THREAD_LOCAL int32_t error_code = SILEX_FONT_OK;
 static THREAD_LOCAL char error_detail[256];
 static THREAD_LOCAL char text_buffer[256];
+static THREAD_LOCAL uint32_t outline_failure_after;
 
 static void lock_state(void) {
     while (atomic_flag_test_and_set_explicit(&state_guard, memory_order_acquire)) {}
@@ -186,6 +220,109 @@ static const FontGlyphRecord *checked_glyph(const void *raw, uint32_t index) {
         return NULL;
     }
     return &shape->glyphs[index];
+}
+
+static const FontOutline *checked_outline(const void *raw) {
+    const FontOutline *outline = raw;
+    if (outline == NULL || outline->magic != OUTLINE_MAGIC || outline->entry == NULL) {
+        fail(SILEX_FONT_INTERNAL, "a live font outline is required");
+        return NULL;
+    }
+    return outline;
+}
+
+static void free_outline_entry(FontOutlineEntry *entry) {
+    if (entry == NULL) return;
+    free(entry->variations);
+    free(entry->steps);
+    free(entry);
+}
+
+typedef struct OutlineBuilder {
+    FontOutlineStep *steps;
+    uint32_t count;
+    uint32_t capacity;
+    int failed;
+    uint32_t failure_after;
+} OutlineBuilder;
+
+static int append_outline_step(OutlineBuilder *builder, int32_t kind, const FT_Vector *a, const FT_Vector *b, const FT_Vector *c) {
+    if (builder->failure_after > 0 && builder->count >= builder->failure_after) {
+        builder->failed = 1;
+        return 1;
+    }
+    if (builder->count == builder->capacity) {
+        uint32_t next_capacity = builder->capacity == 0 ? 32 : builder->capacity * 2;
+        FontOutlineStep *next = realloc(builder->steps, (size_t)next_capacity * sizeof(*next));
+        if (next == NULL) {
+            builder->failed = 1;
+            return 1;
+        }
+        builder->steps = next;
+        builder->capacity = next_capacity;
+    }
+    FontOutlineStep *step = &builder->steps[builder->count++];
+    memset(step, 0, sizeof(*step));
+    step->kind = kind;
+    if (a != NULL) { step->coordinates[0] = (int32_t)a->x; step->coordinates[1] = (int32_t)a->y; }
+    if (b != NULL) { step->coordinates[2] = (int32_t)b->x; step->coordinates[3] = (int32_t)b->y; }
+    if (c != NULL) { step->coordinates[4] = (int32_t)c->x; step->coordinates[5] = (int32_t)c->y; }
+    return 0;
+}
+
+static int outline_move_to(const FT_Vector *to, void *raw) {
+    OutlineBuilder *builder = raw;
+    if (builder->count > 0 && builder->steps[builder->count - 1].kind != SILEX_FONT_OUTLINE_CLOSE) {
+        if (append_outline_step(builder, SILEX_FONT_OUTLINE_CLOSE, NULL, NULL, NULL) != 0) return 1;
+    }
+    return append_outline_step(builder, SILEX_FONT_OUTLINE_MOVE, to, NULL, NULL);
+}
+
+static int outline_line_to(const FT_Vector *to, void *raw) {
+    return append_outline_step(raw, SILEX_FONT_OUTLINE_LINE, to, NULL, NULL);
+}
+
+static int outline_conic_to(const FT_Vector *control, const FT_Vector *to, void *raw) {
+    return append_outline_step(raw, SILEX_FONT_OUTLINE_CONIC_TO, control, to, NULL);
+}
+
+static int outline_cubic_to(const FT_Vector *first, const FT_Vector *second, const FT_Vector *to, void *raw) {
+    return append_outline_step(raw, SILEX_FONT_OUTLINE_CUBIC_TO, first, second, to);
+}
+
+static int same_variations(const FontOutlineEntry *entry, const FontInstance *instance) {
+    if (entry->variation_count != instance->variation_count) return 0;
+    for (unsigned int index = 0; index < entry->variation_count; ++index) {
+        if (entry->variations[index].tag != instance->variations[index].tag ||
+            entry->variations[index].value != instance->variations[index].value) return 0;
+    }
+    return 1;
+}
+
+static FT_Error apply_instance_variations(const FontInstance *instance) {
+    FT_Face face = instance->face->ft_face;
+    if (!FT_HAS_MULTIPLE_MASTERS(face)) return FT_Err_Ok;
+    FT_MM_Var *multiple_master = NULL;
+    FT_Error error = FT_Get_MM_Var(face, &multiple_master);
+    if (error != FT_Err_Ok) return error;
+    FT_Fixed *coordinates = malloc((size_t)multiple_master->num_axis * sizeof(*coordinates));
+    if (coordinates == NULL) {
+        FT_Done_MM_Var(state.freetype, multiple_master);
+        return FT_Err_Out_Of_Memory;
+    }
+    for (FT_UInt axis = 0; axis < multiple_master->num_axis; ++axis) {
+        coordinates[axis] = multiple_master->axis[axis].def;
+        for (unsigned int variation = 0; variation < instance->variation_count; ++variation) {
+            if (multiple_master->axis[axis].tag == instance->variations[variation].tag) {
+                coordinates[axis] = (FT_Fixed)(instance->variations[variation].value * 65536.0f);
+                break;
+            }
+        }
+    }
+    error = FT_Set_Var_Design_Coordinates(face, multiple_master->num_axis, coordinates);
+    free(coordinates);
+    FT_Done_MM_Var(state.freetype, multiple_master);
+    return error;
 }
 
 static int valid_utf8(const uint8_t *bytes, size_t count) {
@@ -412,6 +549,8 @@ void silex_font_face_destroy(void *raw) {
         return;
     }
     face->magic = 0;
+    for (uint32_t index = 0; index < face->outline_count; ++index) free_outline_entry(face->outlines[index]);
+    free(face->outlines);
     hb_face_destroy(face->hb_face);
     hb_blob_destroy(face->hb_blob);
     lock_state();
@@ -582,6 +721,7 @@ void *silex_font_instance_create(const void *raw_face) {
     hb_ot_font_set_funcs(instance->hb_font);
     int upem = (int)hb_face_get_upem(face->hb_face);
     hb_font_set_scale(instance->hb_font, upem, upem);
+    instance->face = (FontFace *)face;
     instance->magic = INSTANCE_MAGIC;
     lock_state(); ++state.instances; unlock_state();
     return instance;
@@ -645,6 +785,169 @@ int32_t silex_font_instance_scalar_bounds(
     *height = extents.height;
     return 1;
 }
+
+void *silex_font_outline_create(const void *raw_instance, uint32_t glyph_id) {
+    clear_error();
+    FontInstance *instance = checked_instance((void *)raw_instance);
+    if (instance == NULL) return NULL;
+    FontFace *face = instance->face;
+    if (face == NULL || face->magic != FACE_MAGIC) {
+        fail(SILEX_FONT_INTERNAL, "font outline extraction requires a live face");
+        return NULL;
+    }
+    if (!FT_IS_SCALABLE(face->ft_face) || glyph_id >= (uint32_t)face->ft_face->num_glyphs) return NULL;
+
+    lock_state();
+    FontOutlineEntry *entry = NULL;
+    for (uint32_t index = 0; index < face->outline_count; ++index) {
+        FontOutlineEntry *candidate = face->outlines[index];
+        if (candidate->glyph_id == glyph_id && same_variations(candidate, instance)) {
+            entry = candidate;
+            break;
+        }
+    }
+    if (entry == NULL) {
+        FT_Error error = apply_instance_variations(instance);
+        if (error == FT_Err_Ok) {
+            error = FT_Load_Glyph(
+                face->ft_face,
+                (FT_UInt)glyph_id,
+                FT_LOAD_NO_SCALE | FT_LOAD_NO_HINTING | FT_LOAD_NO_BITMAP | FT_LOAD_IGNORE_TRANSFORM
+            );
+        }
+        if (error != FT_Err_Ok) {
+            unlock_state();
+            fail_ft("could not load the unscaled glyph outline", error);
+            return NULL;
+        }
+        if (face->ft_face->glyph->format != FT_GLYPH_FORMAT_OUTLINE) {
+            unlock_state();
+            return NULL;
+        }
+
+        entry = calloc(1, sizeof(*entry));
+        if (entry == NULL) {
+            unlock_state();
+            fail(SILEX_FONT_OUT_OF_MEMORY, "could not allocate a glyph outline cache entry");
+            return NULL;
+        }
+        entry->glyph_id = glyph_id;
+        entry->variation_count = instance->variation_count;
+        if (entry->variation_count > 0) {
+            entry->variations = malloc((size_t)entry->variation_count * sizeof(*entry->variations));
+            if (entry->variations == NULL) {
+                free_outline_entry(entry);
+                unlock_state();
+                fail(SILEX_FONT_OUT_OF_MEMORY, "could not retain glyph outline variation coordinates");
+                return NULL;
+            }
+            memcpy(entry->variations, instance->variations, (size_t)entry->variation_count * sizeof(*entry->variations));
+        }
+
+        OutlineBuilder builder = {0};
+        builder.failure_after = outline_failure_after;
+        FT_Outline_Funcs functions = {
+            outline_move_to,
+            outline_line_to,
+            outline_conic_to,
+            outline_cubic_to,
+            0,
+            0
+        };
+        error = FT_Outline_Decompose(&face->ft_face->glyph->outline, &functions, &builder);
+        if (error == FT_Err_Ok && builder.count > 0 && builder.steps[builder.count - 1].kind != SILEX_FONT_OUTLINE_CLOSE) {
+            if (append_outline_step(&builder, SILEX_FONT_OUTLINE_CLOSE, NULL, NULL, NULL) != 0) error = FT_Err_Out_Of_Memory;
+        }
+        if (error != FT_Err_Ok || builder.failed) {
+            free(builder.steps);
+            free_outline_entry(entry);
+            unlock_state();
+            if (builder.failed) fail(SILEX_FONT_OUT_OF_MEMORY, "could not allocate glyph outline commands");
+            else fail_ft("could not decompose the glyph outline", error);
+            return NULL;
+        }
+        entry->steps = builder.steps;
+        entry->step_count = builder.count;
+        FT_BBox box = {0, 0, 0, 0};
+        error = FT_Outline_Get_BBox(&face->ft_face->glyph->outline, &box);
+        if (error != FT_Err_Ok) {
+            free_outline_entry(entry);
+            unlock_state();
+            fail_ft("could not compute exact glyph outline bounds", error);
+            return NULL;
+        }
+        entry->x_min = (int32_t)box.xMin;
+        entry->y_min = (int32_t)box.yMin;
+        entry->x_max = (int32_t)box.xMax;
+        entry->y_max = (int32_t)box.yMax;
+        entry->x_advance = (int32_t)face->ft_face->glyph->advance.x;
+        entry->y_advance = (int32_t)face->ft_face->glyph->advance.y;
+
+        if (face->outline_count == face->outline_capacity) {
+            uint32_t next_capacity = face->outline_capacity == 0 ? 32 : face->outline_capacity * 2;
+            FontOutlineEntry **next = realloc(face->outlines, (size_t)next_capacity * sizeof(*next));
+            if (next == NULL) {
+                free_outline_entry(entry);
+                unlock_state();
+                fail(SILEX_FONT_OUT_OF_MEMORY, "could not grow the glyph outline cache");
+                return NULL;
+            }
+            face->outlines = next;
+            face->outline_capacity = next_capacity;
+        }
+        face->outlines[face->outline_count++] = entry;
+        ++face->outline_decomposition_count;
+    }
+    unlock_state();
+
+    FontOutline *outline = malloc(sizeof(*outline));
+    if (outline == NULL) {
+        fail(SILEX_FONT_OUT_OF_MEMORY, "could not allocate the glyph outline handle");
+        return NULL;
+    }
+    outline->magic = OUTLINE_MAGIC;
+    outline->entry = entry;
+    lock_state(); ++state.outlines; unlock_state();
+    return outline;
+}
+
+void silex_font_outline_destroy(void *raw) {
+    if (raw == NULL) return;
+    FontOutline *outline = raw;
+    if (outline->magic != OUTLINE_MAGIC) {
+        fail(SILEX_FONT_INTERNAL, "invalid font outline handle");
+        return;
+    }
+    outline->magic = 0;
+    free(outline);
+    lock_state(); if (state.outlines > 0) --state.outlines; unlock_state();
+}
+
+uint32_t silex_font_outline_step_count(const void *raw) {
+    const FontOutline *outline = checked_outline(raw);
+    return outline == NULL ? 0 : outline->entry->step_count;
+}
+
+int32_t silex_font_outline_step_kind(const void *raw, uint32_t index) {
+    const FontOutline *outline = checked_outline(raw);
+    if (outline == NULL || index >= outline->entry->step_count) return 0;
+    return outline->entry->steps[index].kind;
+}
+
+int32_t silex_font_outline_step_coordinate(const void *raw, uint32_t index, uint32_t coordinate) {
+    const FontOutline *outline = checked_outline(raw);
+    if (outline == NULL || index >= outline->entry->step_count || coordinate >= 6) return 0;
+    return outline->entry->steps[index].coordinates[coordinate];
+}
+
+int32_t silex_font_outline_x_min(const void *raw) { const FontOutline *o = checked_outline(raw); return o == NULL ? 0 : o->entry->x_min; }
+int32_t silex_font_outline_y_min(const void *raw) { const FontOutline *o = checked_outline(raw); return o == NULL ? 0 : o->entry->y_min; }
+int32_t silex_font_outline_x_max(const void *raw) { const FontOutline *o = checked_outline(raw); return o == NULL ? 0 : o->entry->x_max; }
+int32_t silex_font_outline_y_max(const void *raw) { const FontOutline *o = checked_outline(raw); return o == NULL ? 0 : o->entry->y_max; }
+int32_t silex_font_outline_x_advance(const void *raw) { const FontOutline *o = checked_outline(raw); return o == NULL ? 0 : o->entry->x_advance; }
+int32_t silex_font_outline_y_advance(const void *raw) { const FontOutline *o = checked_outline(raw); return o == NULL ? 0 : o->entry->y_advance; }
+uint32_t silex_font_face_outline_decomposition_count(const void *raw) { const FontFace *f = checked_face(raw); return f == NULL ? 0 : f->outline_decomposition_count; }
+void silex_font_test_fail_outline_after(uint32_t step_count) { outline_failure_after = step_count; }
 
 void *silex_font_shape_create(
     const void *raw_instance,
@@ -927,3 +1230,4 @@ const char *silex_font_last_error_detail(void) { return error_detail; }
 uint32_t silex_font_live_library_count(void) { lock_state(); uint32_t value = state.libraries; unlock_state(); return value; }
 uint32_t silex_font_live_face_count(void) { lock_state(); uint32_t value = state.faces; unlock_state(); return value; }
 uint32_t silex_font_live_instance_count(void) { lock_state(); uint32_t value = state.instances; unlock_state(); return value; }
+uint32_t silex_font_live_outline_count(void) { lock_state(); uint32_t value = state.outlines; unlock_state(); return value; }

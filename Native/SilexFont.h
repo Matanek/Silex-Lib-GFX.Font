@@ -8,7 +8,7 @@
 extern "C" {
 #endif
 
-#define SILEX_FONT_ABI_VERSION 3u
+#define SILEX_FONT_ABI_VERSION 4u
 
 enum SilexFontStatus {
     SILEX_FONT_OK = 0,
@@ -41,6 +41,14 @@ enum SilexFontDirection {
     SILEX_FONT_DIRECTION_RIGHT_TO_LEFT = 2,
     SILEX_FONT_DIRECTION_TOP_TO_BOTTOM = 3,
     SILEX_FONT_DIRECTION_BOTTOM_TO_TOP = 4
+};
+
+enum SilexFontOutlineCommand {
+    SILEX_FONT_OUTLINE_MOVE = 1,
+    SILEX_FONT_OUTLINE_LINE = 2,
+    SILEX_FONT_OUTLINE_CONIC_TO = 3,
+    SILEX_FONT_OUTLINE_CUBIC_TO = 4,
+    SILEX_FONT_OUTLINE_CLOSE = 5
 };
 
 uint32_t silex_font_abi_version(void);
@@ -100,6 +108,20 @@ int32_t silex_font_instance_scalar_bounds(
     int32_t *height
 );
 
+void *silex_font_outline_create(const void *instance, uint32_t glyph_id);
+void silex_font_outline_destroy(void *outline);
+uint32_t silex_font_outline_step_count(const void *outline);
+int32_t silex_font_outline_step_kind(const void *outline, uint32_t index);
+int32_t silex_font_outline_step_coordinate(const void *outline, uint32_t index, uint32_t coordinate);
+int32_t silex_font_outline_x_min(const void *outline);
+int32_t silex_font_outline_y_min(const void *outline);
+int32_t silex_font_outline_x_max(const void *outline);
+int32_t silex_font_outline_y_max(const void *outline);
+int32_t silex_font_outline_x_advance(const void *outline);
+int32_t silex_font_outline_y_advance(const void *outline);
+uint32_t silex_font_face_outline_decomposition_count(const void *face);
+void silex_font_test_fail_outline_after(uint32_t step_count);
+
 void *silex_font_shape_create(
     const void *instance,
     const uint8_t *utf8,
@@ -145,6 +167,7 @@ const char *silex_font_last_error_detail(void);
 uint32_t silex_font_live_library_count(void);
 uint32_t silex_font_live_face_count(void);
 uint32_t silex_font_live_instance_count(void);
+uint32_t silex_font_live_outline_count(void);
 
 #ifdef __cplusplus
 }

@@ -1,5 +1,6 @@
 use GFX.Font
 use GFX.Font.Native
+use STD.Threading
 
 func exercise_native_lifetimes() {
     let bytes = embed_bytes("Fixtures/Minimal.ttf")
@@ -20,8 +21,8 @@ func exercise_native_lifetimes() {
     }
 }
 
-test "verify ABI v3 and release every native lifetime" {
-    assert(Native.abi_version_value() == 3)
+test "verify ABI v4 and release every native lifetime" {
+    assert(Native.abi_version_value() == 4)
     assert(Native.abi_pointer_size_value() == 8)
     assert(Native.abi_size_size_value() == 8)
     assert(Native.abi_pointer_alignment_value() == 8)
@@ -32,6 +33,101 @@ test "verify ABI v3 and release every native lifetime" {
     assert(Native.live_library_count() == 0)
     assert(Native.live_face_count() == 0)
     assert(Native.live_instance_count() == 0)
+}
+
+test "outline cache ignores logical size and releases transient handles" {
+    match Font.Face.default() {
+        failure(error) => { panic(error.detail) }
+        success(face) => {
+            var small = require_instance(face)
+            match Font.Instance.create(face, size:48.0) {
+                failure(error) => { panic(error.detail) }
+                success(large) => {
+                    let glyph = require_run(small, "A", Font.ShapeOptions()).glyphs()[0].id
+                    match small.outline(glyph) { failure(error) => { panic(error.detail) }; success(outline) => {} }
+                    assert(Native.live_outline_count() == 0)
+                    assert(face.native_outline_decomposition_count() == 1)
+                    match large.outline(glyph) { failure(error) => { panic(error.detail) }; success(outline) => {} }
+                    assert(Native.live_outline_count() == 0)
+                    assert(face.native_outline_decomposition_count() == 1)
+                    match large.outline((face.glyph_count() + 1) as uint32) {
+                        failure(error) => { panic(error.detail) }
+                        success(outline) => {}
+                    }
+                    assert(Native.live_outline_count() == 0)
+                    assert(face.native_outline_decomposition_count() == 1)
+                }
+            }
+        }
+    }
+}
+
+test "outline callback allocation failure releases partial state" {
+    match Font.Face.default() {
+        failure(error) => { panic(error.detail) }
+        success(face) => {
+            var instance = require_instance(face)
+            let glyph = require_run(instance, "B", Font.ShapeOptions()).glyphs()[0].id
+            Native.fail_outline_after_for_test(1)
+            match instance.outline(glyph) {
+                success(outline) => { panic("injected outline allocation failure succeeded") }
+                failure(error) => { match error.kind { out_of_memory => {}; else => { panic(error.detail) } } }
+            }
+            Native.fail_outline_after_for_test(0)
+            assert(Native.live_outline_count() == 0)
+            assert(face.native_outline_decomposition_count() == 0)
+            match instance.outline(glyph) {
+                failure(error) => { panic(error.detail) }
+                success(outline) => { if outline == null { panic("outline stayed unavailable after fault reset") } }
+            }
+            assert(face.native_outline_decomposition_count() == 1)
+            assert(Native.live_outline_count() == 0)
+        }
+    }
+}
+
+struct OutlineReadJob:Threading.Job {
+    var face:Font.Face
+    var checksum:int
+
+    func execute() {
+        var instance = require_instance(self.face)
+        let glyph = require_run(instance, "O", Font.ShapeOptions()).glyphs()[0].id
+        var total = 0
+        for iteration in 0...100 {
+            match instance.outline(glyph) {
+                failure(error) => { panic(error.detail) }
+                success(outline) => {
+                    if value = outline { total += value.contours.count() }
+                    else { panic("concurrent outline became unavailable") }
+                }
+            }
+        }
+        self.checksum = total
+    }
+}
+
+test "shared face outline cache is safe across immutable instances" {
+    match Font.Face.default() {
+        failure(error) => { panic(error.detail) }
+        success(face) => {
+            var executor = Threading.Executor(worker_count:4)
+            var first = executor.submit(OutlineReadJob(face:face, checksum:0))
+            var second = executor.submit(OutlineReadJob(face:face, checksum:0))
+            var third = executor.submit(OutlineReadJob(face:face, checksum:0))
+            var fourth = executor.submit(OutlineReadJob(face:face, checksum:0))
+            var one = first.complete()
+            var two = second.complete()
+            var three = third.complete()
+            var four = fourth.complete()
+            assert(one.checksum == 200)
+            assert(one.checksum == two.checksum)
+            assert(two.checksum == three.checksum)
+            assert(three.checksum == four.checksum)
+            assert(face.native_outline_decomposition_count() == 1)
+            assert(Native.live_outline_count() == 0)
+        }
+    }
 }
 
 func require_instance(face:Font.Face) Font.Instance {
