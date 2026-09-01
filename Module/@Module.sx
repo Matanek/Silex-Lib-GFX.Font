@@ -412,7 +412,7 @@ class ShapeCache {
         if self.entries.count() < 64 {
             self.entries.append(entry)
         } else {
-            self.entries.replace(self.cursor, entry)
+            self.entries[self.cursor] = entry
             self.cursor = (self.cursor + 1) % 64
         }
     }
