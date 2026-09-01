@@ -535,6 +535,15 @@ public class Face {
         }
     }
 
+    private static func bundled(bytes:uint8[], digest:str) Result<Face, Error> {
+        match Native.open(bytes, 0) {
+            failure(error) => { return Result<Face, Error>.failure(public_error(error)) }
+            success(data) => {
+                return Result<Face, Error>.success(Face(data, digest + "#0"))
+            }
+        }
+    }
+
     static func try_open(bytes:uint8[], index:int = 0) Result<Face, Error> {
         return Face.decode(bytes, face_index:index)
     }
@@ -552,11 +561,17 @@ public class Face {
     }
 
     static func default() Result<Face, Error> {
-        return Face.decode(embed_bytes("../Assets/Fonts/NotoSans.ttf"))
+        return Face.bundled(
+            embed_bytes("../Assets/Fonts/NotoSans.ttf"),
+            "bfb7bb691513f12e734dc346c03a03f784912432d7e3fa8e56efcf906fe86b3d"
+        )
     }
 
     static func monospace() Result<Face, Error> {
-        return Face.decode(embed_bytes("../Assets/Fonts/NotoSansMono-Regular.ttf"))
+        return Face.bundled(
+            embed_bytes("../Assets/Fonts/NotoSansMono-Regular.ttf"),
+            "65b5e2b2c4a1fba9ae8be1f026cb35b03dcb8886d9b2a4147054fde12f7e767d"
+        )
     }
 
     func identity() str { return self.stable_identity }
