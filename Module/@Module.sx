@@ -412,7 +412,7 @@ class ShapeCache {
         if self.entries.count() < 64 {
             self.entries.append(entry)
         } else {
-            self.entries[self.cursor] = entry
+            self.entries.replace(self.cursor, entry)
             self.cursor = (self.cursor + 1) % 64
         }
     }
@@ -1204,6 +1204,27 @@ func normalized_outline(glyph_id:uint32, data:Native.OutlineData, units_per_em:i
 }
 
 func validated_shape(text:str, options:ShapeOptions) Result<ValidatedShape, Error> {
+    if default_shape_options(options) {
+        let byte_count = C.byte_count(text) as int
+        var index:uint = 0
+        while index < byte_count as uint {
+            let byte = C.byte_at(text, index)
+            if byte == 10 || byte == 13 {
+                return Result<ValidatedShape, Error>.failure(Error(
+                    kind:ErrorKind.invalid_text,
+                    detail:"font shaping accepts one homogeneous run without line breaks"
+                ))
+            }
+            index++
+        }
+        return Result<ValidatedShape, Error>.success(ValidatedShape(
+            key:"$(byte_count):" + text,
+            direction:0,
+            script:"",
+            language:"und",
+            features:[]
+        ))
+    }
     let text_bytes = UTF8.bytes(text)
     for byte in text_bytes {
         if byte == 10 || byte == 13 {
@@ -1281,6 +1302,13 @@ func validated_shape(text:str, options:ShapeOptions) Result<ValidatedShape, Erro
         language:language,
         features:native_features
     ))
+}
+
+func default_shape_options(options:@ShapeOptions) bool {
+    if direction = options.direction { return false }
+    if script = options.script { return false }
+    if language = options.language { return false }
+    return options.features.count() == 0
 }
 
 func glyph_run_data(instance:Instance, cache_key:str, text:str, shaped:Native.ShapeData) GlyphRunData {
