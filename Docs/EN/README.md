@@ -263,10 +263,13 @@ positions: the renderer must draw glyphs in order at their shaped origins.
 
 ## Use bundled fonts
 
-`Face.default()` loads variable Noto Sans and `Face.monospace()` loads Noto Sans
-Mono from package assets. Both functions return `Result<Face, Error>` like the
-other loading paths. Their files and SIL Open Font License are under
-`Assets/Fonts` and `Licenses`.
+`Face.default()` loads variable Noto Sans, `Face.monospace()` loads Noto Sans
+Mono, and `Face.pixel()` loads Departure Mono from package assets. These
+functions return `Result<Face, Error>` like the other loading paths. Departure
+Mono is a retro monospaced face with extended Latin coverage, including French
+diacritics. Prefer logical sizes in multiples of 11 to preserve its exact pixel
+grid. The files and their SIL Open Font Licenses are under `Assets/Fonts` and
+`Licenses`.
 
 GFX.Font does not inspect system fonts or download anything. Applications
 compose their faces from assets and explicit paths.

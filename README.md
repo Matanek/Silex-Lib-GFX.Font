@@ -19,5 +19,5 @@ silex install GFX.Font
 - [Reproduire les artefacts natifs](Native/README.md)
 
 Le package demande Silex 0.43.0 ou une version plus récente. Il distribue Noto
-Sans variable et Noto Sans Mono, ne découvre pas les fontes système et n’expose
-aucun handle FreeType ou HarfBuzz.
+Sans variable, Noto Sans Mono et la fonte pixel rétro Departure Mono, ne
+découvre pas les fontes système et n’expose aucun handle FreeType ou HarfBuzz.

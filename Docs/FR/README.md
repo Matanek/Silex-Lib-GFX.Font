@@ -275,10 +275,14 @@ doit dessiner les glyphes dans leur ordre avec leurs origines façonnées.
 
 ## Utiliser les fontes distribuées
 
-`Face.default()` charge Noto Sans variable et `Face.monospace()` charge Noto
-Sans Mono depuis les assets du package. Les deux fonctions retournent un
-`Result<Face, Error>` comme les autres parcours de chargement. Leurs fichiers et
-la licence SIL Open Font License se trouvent dans `Assets/Fonts` et `Licenses`.
+`Face.default()` charge Noto Sans variable, `Face.monospace()` charge Noto Sans
+Mono et `Face.pixel()` charge Departure Mono depuis les assets du package. Ces
+fonctions retournent un `Result<Face, Error>` comme les autres parcours de
+chargement. Departure Mono est une fonte monospace rétro avec une couverture
+latine étendue, notamment les accents français. Pour conserver sa grille de
+pixels exacte, employer de préférence des tailles logiques multiples de 11.
+Les fichiers et leurs licences SIL Open Font License se trouvent dans
+`Assets/Fonts` et `Licenses`.
 
 GFX.Font ne cherche pas les fontes installées sur la machine et ne télécharge
 rien. Une application compose ses faces à partir de ses assets et de chemins

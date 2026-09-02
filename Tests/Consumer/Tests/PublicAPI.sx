@@ -63,7 +63,7 @@ struct FaceReadJob:Threading.Job {
 
 test "path and bytes share a stable face identity after file removal" {
     let bytes = embed_bytes("../../Fixtures/Minimal.ttf")
-    let path = "Tests/TemporaryFace.ttf"
+    let path = "Packages/GFX.Font/Tests/Consumer/Tests/TemporaryFace.ttf"
     write_font(path, bytes)
     var from_path = require_face(Font.Face.open(path))
     var from_bytes = require_face(Font.Face.decode(bytes))
@@ -198,17 +198,31 @@ test "missing files and corrupt bytes return distinct errors" {
     }
 }
 
-test "bundled default and monospace assets have stable digests" {
+test "bundled default monospace and pixel assets have stable digests and coverage" {
     let default_bytes = embed_bytes("../../../Assets/Fonts/NotoSans.ttf")
     let mono_bytes = embed_bytes("../../../Assets/Fonts/NotoSansMono-Regular.ttf")
+    let pixel_bytes = embed_bytes("../../../Assets/Fonts/DepartureMono-Regular.otf")
     assert(Crypto.sha256(@default_bytes[0:default_bytes.count()]) == "bfb7bb691513f12e734dc346c03a03f784912432d7e3fa8e56efcf906fe86b3d")
     assert(Crypto.sha256(@mono_bytes[0:mono_bytes.count()]) == "65b5e2b2c4a1fba9ae8be1f026cb35b03dcb8886d9b2a4147054fde12f7e767d")
+    assert(Crypto.sha256(@pixel_bytes[0:pixel_bytes.count()]) == "4d53f663155cf8bf7ffc8e688776e719625f7bbb80a8d90073438b249261a2e0")
     var default_face = require_face(Font.Face.default())
     var mono_face = require_face(Font.Face.monospace())
+    var pixel_face = require_face(Font.Face.pixel())
     assert(default_face.identity() == "bfb7bb691513f12e734dc346c03a03f784912432d7e3fa8e56efcf906fe86b3d#0")
     assert(mono_face.identity() == "65b5e2b2c4a1fba9ae8be1f026cb35b03dcb8886d9b2a4147054fde12f7e767d#0")
+    assert(pixel_face.identity() == "4d53f663155cf8bf7ffc8e688776e719625f7bbb80a8d90073438b249261a2e0#0")
     assert(require_family(default_face) == "Noto Sans")
     assert(require_family(mono_face) == "Noto Sans Mono")
+    assert(require_family(pixel_face) == "Departure Mono")
+    assert(pixel_face.supports(0x00e9 as uint32))
+    assert(pixel_face.supports(0x00e7 as uint32))
+    assert(pixel_face.supports(0x0153 as uint32))
+
+    var pixel = require_instance(Font.Instance.create(pixel_face, size:22.0))
+    match pixel.shape("Écran redimensionné — difficulté très élevée, cœur et œuvre") {
+        failure(error) => { panic(error.detail) }
+        success(run) => { assert(run.missing_glyph_count() == 0) }
+    }
 }
 
 test "same face supports repeated concurrent immutable reads" {

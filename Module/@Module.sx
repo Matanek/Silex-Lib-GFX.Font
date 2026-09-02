@@ -574,6 +574,13 @@ public class Face {
         )
     }
 
+    static func pixel() Result<Face, Error> {
+        return Face.bundled(
+            embed_bytes("../Assets/Fonts/DepartureMono-Regular.otf"),
+            "4d53f663155cf8bf7ffc8e688776e719625f7bbb80a8d90073438b249261a2e0"
+        )
+    }
+
     func identity() str { return self.stable_identity }
     func index() int { return Native.index(self.face_handle) }
     func face_count() int { return Native.count(self.face_handle) }
