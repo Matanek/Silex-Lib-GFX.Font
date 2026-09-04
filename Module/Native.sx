@@ -469,9 +469,7 @@ func copy_text(pointer:C.Pointer<uint8>) str {
 }
 
 func signed32(value:int32) int {
-    let bits = value as uint32
-    if bits > 2147483647 as uint32 { return bits as int - 4294967296 }
-    return bits as int
+    return value as int
 }
 
 let abi_version = C.function<func() uint32>(library:Boundary.FontBoundary, name:"silex_font_abi_version")
