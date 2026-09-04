@@ -1,0 +1,87 @@
+name: Build missing GFX.Font desktop archives
+
+run-name: Build missing GFX.Font desktop archives
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - spec-desktop-platform-portability-07
+    paths:
+      - .github/workflows/build-portability.yml
+      - Native/**
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gfx-font-build-portability-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [macos-x64, linux-arm64]
+
+    name: ${{ matrix.target }}
+    runs-on: macos-15
+    timeout-minutes: 60
+
+    steps:
+      - name: Check out GFX.Font
+        uses: actions/checkout@v6
+        with:
+          path: GFX.Font
+
+      - name: Install Zig 0.16.0
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/zig.tar.xz"
+          curl -fL https://ziglang.org/download/0.16.0/zig-aarch64-macos-0.16.0.tar.xz -o "$archive"
+          echo "b23d70deaa879b5c2d486ed3316f7eaa53e84acf6fc9cc747de152450d401489  $archive" | shasum -a 256 -c -
+          tar -xJf "$archive" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/zig-aarch64-macos-0.16.0" >> "$GITHUB_PATH"
+
+      - name: Download and verify upstream sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/sources"
+          curl -fL https://download.savannah.gnu.org/releases/freetype/freetype-2.14.3.tar.xz -o "$RUNNER_TEMP/freetype.tar.xz"
+          curl -fL https://github.com/harfbuzz/harfbuzz/releases/download/14.2.1/harfbuzz-14.2.1.tar.xz -o "$RUNNER_TEMP/harfbuzz.tar.xz"
+          echo "36bc4f1cc413335368ee656c42afca65c5a3987e8768cc28cf11ba775e785a5f  $RUNNER_TEMP/freetype.tar.xz" | shasum -a 256 -c -
+          echo "a54a5d8e9380a41fbb762ce367bcbf7704792dfca0d93f1bbca86c5a57902e0e  $RUNNER_TEMP/harfbuzz.tar.xz" | shasum -a 256 -c -
+          tar -xJf "$RUNNER_TEMP/freetype.tar.xz" -C "$RUNNER_TEMP/sources"
+          tar -xJf "$RUNNER_TEMP/harfbuzz.tar.xz" -C "$RUNNER_TEMP/sources"
+
+      - name: Build twice and compare
+        shell: bash
+        run: |
+          set -euo pipefail
+          env RUNNER_TEMP="$RUNNER_TEMP/rebuild-a" GFX.Font/Native/build-font-boundary.sh \
+            "$RUNNER_TEMP/sources/freetype-2.14.3" \
+            "$RUNNER_TEMP/sources/harfbuzz-14.2.1" \
+            "${{ matrix.target }}"
+          mkdir -p "$RUNNER_TEMP/output-a"
+          cp GFX.Font/Boundary/${{ matrix.target }}/* "$RUNNER_TEMP/output-a/"
+          env RUNNER_TEMP="$RUNNER_TEMP/rebuild-b" GFX.Font/Native/build-font-boundary.sh \
+            "$RUNNER_TEMP/sources/freetype-2.14.3" \
+            "$RUNNER_TEMP/sources/harfbuzz-14.2.1" \
+            "${{ matrix.target }}"
+          mkdir -p "$RUNNER_TEMP/output-b"
+          cp GFX.Font/Boundary/${{ matrix.target }}/* "$RUNNER_TEMP/output-b/"
+          for archive in libSilexFont.a libfreetype.a libharfbuzz.a; do
+            cmp "$RUNNER_TEMP/output-a/$archive" "$RUNNER_TEMP/output-b/$archive"
+            shasum -a 256 "$RUNNER_TEMP/output-a/$archive"
+          done
+
+      - name: Preserve candidate archives
+        uses: actions/upload-artifact@v4
+        with:
+          name: gfx-font-${{ matrix.target }}
+          path: ${{ runner.temp }}/output-a/*
+          retention-days: 7
+          if-no-files-found: error

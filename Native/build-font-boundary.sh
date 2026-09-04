@@ -1,8 +1,8 @@
 #!/bin/sh
 set -eu
 
-if [ "$#" -ne 2 ]; then
-    echo "usage: Native/build-font-boundary.sh /path/to/freetype-2.14.3 /path/to/harfbuzz-14.2.1" >&2
+if [ "$#" -lt 2 ] || [ "$#" -gt 3 ]; then
+    echo "usage: Native/build-font-boundary.sh /path/to/freetype-2.14.3 /path/to/harfbuzz-14.2.1 [established|macos-x64|linux-arm64]" >&2
     exit 2
 fi
 
@@ -10,6 +10,7 @@ font_native_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 font_package_dir=$(CDPATH= cd -- "$font_native_dir/.." && pwd)
 font_freetype_source=$1
 font_harfbuzz_source=$2
+font_requested_target=${3:-established}
 font_build_root=$(mktemp -d /private/tmp/silex-gfx-font.XXXXXX)
 font_zig_cache="$font_build_root/zig-cache"
 font_llvm_objcopy=${LLVM_OBJCOPY:-}
@@ -64,6 +65,19 @@ build_target() {
     font_cxx=$5
     font_extension=$6
     font_prefix=$7
+    font_target_c_flags=
+    font_target_cxx_flags=
+    font_osx_architecture=
+    font_osx_deployment_target=
+    if [ "$font_name" = macos-x64 ]; then
+        font_target_c_flags="-arch x86_64 -mmacosx-version-min=11.0"
+        font_target_cxx_flags="$font_target_c_flags"
+        font_osx_architecture=x86_64
+        font_osx_deployment_target=11.0
+    elif [ "$font_name" = linux-arm64 ]; then
+        font_target_c_flags=-mno-outline-atomics
+        font_target_cxx_flags=-mno-outline-atomics
+    fi
     font_install_freetype="$font_build_root/install-freetype-$font_name"
     font_install_harfbuzz="$font_build_root/install-harfbuzz-$font_name"
     font_build_freetype="$font_build_root/build-freetype-$font_name"
@@ -86,7 +100,9 @@ build_target() {
         -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY \
         -DCMAKE_INSTALL_PREFIX="$font_install_freetype" \
         -DCMAKE_BUILD_TYPE=Release \
-        "-DCMAKE_C_FLAGS_RELEASE=-O3 -g0 -DNDEBUG -ffile-prefix-map=$font_build_root=/silex-build -ffile-prefix-map=$font_freetype_source=/sources/freetype -ffile-prefix-map=$font_package_dir=/sources/gfx-font" \
+        -DCMAKE_OSX_ARCHITECTURES="$font_osx_architecture" \
+        -DCMAKE_OSX_DEPLOYMENT_TARGET="$font_osx_deployment_target" \
+        "-DCMAKE_C_FLAGS_RELEASE=$font_target_c_flags -O3 -g0 -DNDEBUG -ffile-prefix-map=$font_build_root=/silex-build -ffile-prefix-map=$font_freetype_source=/sources/freetype -ffile-prefix-map=$font_package_dir=/sources/gfx-font" \
         -DBUILD_SHARED_LIBS=OFF \
         -DFT_DISABLE_ZLIB=ON \
         -DFT_DISABLE_BZIP2=ON \
@@ -109,8 +125,10 @@ build_target() {
         -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY \
         -DCMAKE_INSTALL_PREFIX="$font_install_harfbuzz" \
         -DCMAKE_BUILD_TYPE=Release \
-        "-DCMAKE_C_FLAGS_RELEASE=-O3 -g0 -DNDEBUG -ffile-prefix-map=$font_build_root=/silex-build -ffile-prefix-map=$font_harfbuzz_source=/sources/harfbuzz -ffile-prefix-map=$font_package_dir=/sources/gfx-font" \
-        "-DCMAKE_CXX_FLAGS_RELEASE=-O3 -g0 -DNDEBUG -DHB_NO_MMAP -DHB_NO_OPEN -ffile-prefix-map=$font_build_root=/silex-build -ffile-prefix-map=$font_harfbuzz_source=/sources/harfbuzz -ffile-prefix-map=$font_package_dir=/sources/gfx-font" \
+        -DCMAKE_OSX_ARCHITECTURES="$font_osx_architecture" \
+        -DCMAKE_OSX_DEPLOYMENT_TARGET="$font_osx_deployment_target" \
+        "-DCMAKE_C_FLAGS_RELEASE=$font_target_c_flags -O3 -g0 -DNDEBUG -ffile-prefix-map=$font_build_root=/silex-build -ffile-prefix-map=$font_harfbuzz_source=/sources/harfbuzz -ffile-prefix-map=$font_package_dir=/sources/gfx-font" \
+        "-DCMAKE_CXX_FLAGS_RELEASE=$font_target_cxx_flags -O3 -g0 -DNDEBUG -DHB_NO_MMAP -DHB_NO_OPEN -ffile-prefix-map=$font_build_root=/silex-build -ffile-prefix-map=$font_harfbuzz_source=/sources/harfbuzz -ffile-prefix-map=$font_package_dir=/sources/gfx-font" \
         -DBUILD_SHARED_LIBS=OFF \
         -DHB_HAVE_CAIRO=OFF \
         -DHB_HAVE_FREETYPE=OFF \
@@ -130,7 +148,7 @@ build_target() {
 
     mkdir -p "$font_destination"
     env ZIG_GLOBAL_CACHE_DIR="$font_zig_cache" "$font_cc" \
-        -std=c11 -O3 -g0 -DNDEBUG \
+        $font_target_c_flags -std=c11 -O3 -g0 -DNDEBUG \
         -ffile-prefix-map="$font_build_root"=/silex-build \
         -ffile-prefix-map="$font_package_dir"=/sources/gfx-font \
         -I"$font_install_freetype/include/freetype2" \
@@ -139,7 +157,7 @@ build_target() {
         -c "$font_native_dir/SilexFont.c" \
         -o "$font_build_root/SilexFont-$font_name.$font_shim_object_extension"
     env ZIG_GLOBAL_CACHE_DIR="$font_zig_cache" "$font_cc" \
-        -std=c11 -O3 -g0 -DNDEBUG \
+        $font_target_c_flags -std=c11 -O3 -g0 -DNDEBUG \
         -ffile-prefix-map="$font_build_root"=/silex-build \
         -ffile-prefix-map="$font_package_dir"=/sources/gfx-font \
         -I"$font_native_dir" \
@@ -185,9 +203,27 @@ build_target() {
     fi
 }
 
-build_target macos-arm64 Darwin arm64 cc c++ a lib
-build_target linux-x64 Linux x86_64 "$font_native_dir/Toolchains/zig-cc-linux-x64" "$font_native_dir/Toolchains/zig-cxx-linux-x64" a lib
-build_target windows-x64 Windows x86_64 "$font_native_dir/Toolchains/zig-cc-windows-x64" "$font_native_dir/Toolchains/zig-cxx-windows-x64" lib ""
-build_target windows-arm64 Windows aarch64 "$font_native_dir/Toolchains/zig-cc-windows-arm64" "$font_native_dir/Toolchains/zig-cxx-windows-arm64" lib ""
+case "$font_requested_target" in
+    established)
+        build_target macos-arm64 Darwin arm64 cc c++ a lib
+        build_target linux-x64 Linux x86_64 "$font_native_dir/Toolchains/zig-cc-linux-x64" "$font_native_dir/Toolchains/zig-cxx-linux-x64" a lib
+        build_target windows-x64 Windows x86_64 "$font_native_dir/Toolchains/zig-cc-windows-x64" "$font_native_dir/Toolchains/zig-cxx-windows-x64" lib ""
+        build_target windows-arm64 Windows aarch64 "$font_native_dir/Toolchains/zig-cc-windows-arm64" "$font_native_dir/Toolchains/zig-cxx-windows-arm64" lib ""
+        ;;
+    macos-x64)
+        [ "$(uname -s)" = Darwin ] || {
+            echo "macos-x64 must be built on macOS" >&2
+            exit 1
+        }
+        build_target macos-x64 Darwin x86_64 cc c++ a lib
+        ;;
+    linux-arm64)
+        build_target linux-arm64 Linux aarch64 "$font_native_dir/Toolchains/zig-cc-linux-arm64" "$font_native_dir/Toolchains/zig-cxx-linux-arm64" a lib
+        ;;
+    *)
+        echo "unsupported GFX.Font target: $font_requested_target" >&2
+        exit 2
+        ;;
+esac
 
 echo "GFX.Font boundary archives rebuilt in $font_package_dir/Boundary"

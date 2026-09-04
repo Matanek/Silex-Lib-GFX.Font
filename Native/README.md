@@ -22,9 +22,11 @@ The build uses Zig 0.16.0, LLVM objcopy 19 or newer, and CMake 3.31 or newer. It
 clean builds produce the same archives. Cross-target objects are stripped of
 debug metadata and repacked with canonical member names. This also omits the
 non-functional Windows version resource, whose COFF timestamp is not
-reproducible; version provenance remains recorded in the artifact manifest. It
-produces static archives
-for `macos-arm64`, `linux-x64`, `windows-x64`, and `windows-arm64`. FreeType is
+reproducible; version provenance remains recorded in the artifact manifest.
+With no third argument the script reproduces the four established archives.
+Pass `macos-x64` or `linux-arm64` as the third argument to build one of the two
+additional desktop targets. It produces static archives for all six targets.
+FreeType is
 built without zlib, bzip2, PNG, Brotli, or HarfBuzz; HarfBuzz is built without
 FreeType, CoreText, DirectWrite, Uniscribe, GDI, ICU, GLib, Graphite2, Cairo,
 utilities, subsetting, raster, vector, GPU add-ons, memory-mapped files, or
