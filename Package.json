@@ -26,6 +26,20 @@
         }
       }
     },
+    "macos-x64": {
+      "providers": {
+        "FontBoundary": {
+          "archive": "Boundary/macos-x64/libSilexFont.a",
+          "requires": ["GFX.Font.FreeType", "GFX.Font.HarfBuzz"]
+        },
+        "FreeType": {
+          "archive": "Boundary/macos-x64/libfreetype.a"
+        },
+        "HarfBuzz": {
+          "archive": "Boundary/macos-x64/libharfbuzz.a"
+        }
+      }
+    },
     "linux-x64": {
       "providers": {
         "FontBoundary": {
@@ -38,6 +52,21 @@
         },
         "HarfBuzz": {
           "archive": "Boundary/linux-x64/libharfbuzz.a"
+        }
+      }
+    },
+    "linux-arm64": {
+      "providers": {
+        "FontBoundary": {
+          "archive": "Boundary/linux-arm64/libSilexFont.a",
+          "requires": ["GFX.Font.FreeType", "GFX.Font.HarfBuzz"],
+          "libraries": ["m", "pthread"]
+        },
+        "FreeType": {
+          "archive": "Boundary/linux-arm64/libfreetype.a"
+        },
+        "HarfBuzz": {
+          "archive": "Boundary/linux-arm64/libharfbuzz.a"
         }
       }
     },

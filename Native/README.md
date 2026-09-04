@@ -63,3 +63,8 @@ bitmap and coverage handle after the copy.
 The source archives and expanded upstream trees are build inputs and are not
 committed. `Boundary/SHA256SUMS.txt` and every target's
 `Artifact.FontBoundary.json` record the produced artifacts.
+
+The missing macOS X64 and Linux ARM64 archive sets were reproduced byte for
+byte by GitHub Actions run `33908536028`, from the two exact upstream commits
+recorded above. Their hashes and target manifests now complete the same
+six-target contract.

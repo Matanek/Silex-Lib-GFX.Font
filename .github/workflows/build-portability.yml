@@ -9,6 +9,7 @@ on:
       - spec-desktop-platform-portability-07
     paths:
       - .github/workflows/build-portability.yml
+      - Boundary/SHA256SUMS.txt
       - Native/**
 
 permissions:
@@ -85,6 +86,9 @@ jobs:
           for archive in libSilexFont.a libfreetype.a libharfbuzz.a; do
             cmp "$RUNNER_TEMP/output-a/$archive" "$RUNNER_TEMP/output-b/$archive"
             shasum -a 256 "$RUNNER_TEMP/output-a/$archive"
+            expected="$(awk -v path="${{ matrix.target }}/$archive" '$2 == path { print $1 }' GFX.Font/Boundary/SHA256SUMS.txt)"
+            test -n "$expected"
+            echo "$expected  $RUNNER_TEMP/output-a/$archive" | shasum -a 256 -c -
           done
 
       - name: Preserve candidate archives

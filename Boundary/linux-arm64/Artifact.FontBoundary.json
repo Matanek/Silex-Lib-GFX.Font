@@ -1,0 +1,16 @@
+{
+  "abi": "silex-font-5",
+  "target": "linux-arm64",
+  "linkage": "static",
+  "artifacts": {
+    "SilexFont": "82bdbde5c34e1ab2667932d471920f9e31c0bc6c4c22da24694ee7b1ce71c15c",
+    "FreeType": "eb4d3adb9937b6b42b5cf38b75570b86b15b3996f17864578ac6900c350f43fe",
+    "HarfBuzz": "5f2f1e447f8785326fcdab4231de659631edbcf72ff9c04d577e82ebc5226ee5"
+  },
+  "upstream": {
+    "FreeType": "2.14.3@0a0221a1347e2f1e07c395263540026e9a0aa7c7",
+    "HarfBuzz": "14.2.1@56feae4035bdd48f62ba2b8d8c16232d4d89b3a4"
+  },
+  "codecs": [],
+  "system_dependencies": ["m", "pthread"]
+}
