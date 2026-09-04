@@ -40,7 +40,7 @@ jobs:
         run: |
           set -euo pipefail
           archive="$RUNNER_TEMP/zig.tar.xz"
-          curl -fL https://ziglang.org/download/0.16.0/zig-aarch64-macos-0.16.0.tar.xz -o "$archive"
+          curl -fL --retry 5 --retry-all-errors https://ziglang.org/download/0.16.0/zig-aarch64-macos-0.16.0.tar.xz -o "$archive"
           echo "b23d70deaa879b5c2d486ed3316f7eaa53e84acf6fc9cc747de152450d401489  $archive" | shasum -a 256 -c -
           tar -xJf "$archive" -C "$RUNNER_TEMP"
           echo "$RUNNER_TEMP/zig-aarch64-macos-0.16.0" >> "$GITHUB_PATH"
@@ -50,8 +50,8 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/sources"
-          curl -fL https://download.savannah.gnu.org/releases/freetype/freetype-2.14.3.tar.xz -o "$RUNNER_TEMP/freetype.tar.xz"
-          curl -fL https://github.com/harfbuzz/harfbuzz/releases/download/14.2.1/harfbuzz-14.2.1.tar.xz -o "$RUNNER_TEMP/harfbuzz.tar.xz"
+          curl -fL --retry 5 --retry-all-errors https://download.savannah.gnu.org/releases/freetype/freetype-2.14.3.tar.xz -o "$RUNNER_TEMP/freetype.tar.xz"
+          curl -fL --retry 5 --retry-all-errors https://github.com/harfbuzz/harfbuzz/releases/download/14.2.1/harfbuzz-14.2.1.tar.xz -o "$RUNNER_TEMP/harfbuzz.tar.xz"
           echo "36bc4f1cc413335368ee656c42afca65c5a3987e8768cc28cf11ba775e785a5f  $RUNNER_TEMP/freetype.tar.xz" | shasum -a 256 -c -
           echo "a54a5d8e9380a41fbb762ce367bcbf7704792dfca0d93f1bbca86c5a57902e0e  $RUNNER_TEMP/harfbuzz.tar.xz" | shasum -a 256 -c -
           tar -xJf "$RUNNER_TEMP/freetype.tar.xz" -C "$RUNNER_TEMP/sources"
