@@ -20,15 +20,15 @@ fi
 if [ -z "$font_llvm_objcopy" ] && [ -x /opt/homebrew/opt/llvm/bin/llvm-objcopy ]; then
     font_llvm_objcopy=/opt/homebrew/opt/llvm/bin/llvm-objcopy
 fi
-if [ ! -x "$font_llvm_objcopy" ]; then
-    echo "build requires llvm-objcopy; set LLVM_OBJCOPY to its path" >&2
-    exit 2
-fi
 export SOURCE_DATE_EPOCH=0
 export ZERO_AR_DATE=1
 trap 'rm -rf "$font_build_root"' EXIT HUP INT TERM
 
 repack_cross_archive() {
+    if [ ! -x "$font_llvm_objcopy" ]; then
+        echo "Windows archive repacking requires llvm-objcopy; set LLVM_OBJCOPY to its path" >&2
+        exit 2
+    fi
     font_repack_input=$1
     font_repack_output=$2
     font_repack_suffix=$3
