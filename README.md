@@ -1,12 +1,11 @@
 # GFX.Font
 
-`GFX.Font` possède les fontes portables de GFX. Il charge des faces TTF,
-OTF/CFF et TTC depuis des octets ou un fichier, expose leurs noms, leur
-couverture Unicode, leurs métriques et leurs variations, puis crée des
-instances immuables à une taille logique. Une instance façonne ensuite un run
-Unicode homogène en glyphes positionnés, clusters UTF-8 et mesures logiques,
-puis expose leurs contours vectoriels normalisés ou leur couverture alpha
-hintée sans dépendre d’un renderer.
+`GFX.Font` provides GFX's portable fonts. It loads TTF, OTF/CFF, and TTC faces
+from bytes or a file, exposes their names, Unicode coverage, metrics, and
+variations, then creates immutable instances at a logical size. An instance
+shapes a homogeneous Unicode run into positioned glyphs, UTF-8 clusters, and
+logical measurements, then exposes their normalized vector outlines or hinted
+alpha coverage without depending on a renderer.
 
 ```text
 silex install GFX.Font
@@ -14,10 +13,10 @@ silex install GFX.Font
 
 ## Documentation
 
-- [Documentation française](Docs/FR/README.md)
+- [French documentation](Docs/FR/README.md)
 - [English documentation](Docs/EN/README.md)
-- [Reproduire les artefacts natifs](Native/README.md)
+- [Reproduce the native artifacts](Native/README.md)
 
-Le package demande Silex 0.43.0 ou une version plus récente. Il distribue Noto
-Sans variable, Noto Sans Mono et la fonte pixel rétro Departure Mono, ne
-découvre pas les fontes système et n’expose aucun handle FreeType ou HarfBuzz.
+The package requires Silex 0.43.0 or newer. It distributes Noto Sans Variable,
+Noto Sans Mono, and the retro pixel font Departure Mono, does not discover
+system fonts, and exposes no FreeType or HarfBuzz handles.
