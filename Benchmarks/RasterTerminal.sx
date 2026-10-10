@@ -61,8 +61,8 @@ func terminal_screen(columns:int, rows:int, frame:int) str[] {
 func render(instance:Font.Instance, lines:str[]) int {
     var signature = 0
     for line in lines {
-        var run = require_run(instance.shape(line))
-        let coverage = require_coverage(run.rasterize())
+        var run = require_run((try instance.shape(line)))
+        let coverage = require_coverage((try run.rasterize()))
         signature += coverage.byte_count() + coverage.width + coverage.height
         signature += Math.round(coverage.advance.x) as int
     }
@@ -115,8 +115,8 @@ func measure_case(columns:int, rows:int, repetitions:int) {
     var cold_instances:Font.Instance[] = []
     var repetition = 0
     while repetition < repetitions {
-        var face = require_face(Font.Face.monospace())
-        cold_instances.append(require_instance(Font.Instance.create(face, size:14.0)))
+        var face = require_face((try Font.Face.monospace()))
+        cold_instances.append(require_instance((try Font.Instance.create(face, size:14.0))))
         repetition++
     }
 
@@ -132,8 +132,8 @@ func measure_case(columns:int, rows:int, repetitions:int) {
     }
     report(case_name, "cold_shape_raster_compose", cold, signature)
 
-    var warm_face = require_face(Font.Face.monospace())
-    var warm_instance = require_instance(Font.Instance.create(warm_face, size:14.0))
+    var warm_face = require_face((try Font.Face.monospace()))
+    var warm_instance = require_instance((try Font.Instance.create(warm_face, size:14.0)))
     signature += render(warm_instance, stable)
     var warm:float[] = []
     repetition = 0

@@ -526,7 +526,7 @@ public class Face {
     }
 
     static func decode(bytes:uint8[], face_index:int = 0) Result<Face, Error> {
-        match Native.open(bytes, face_index) {
+        match (try Native.open(bytes, face_index)) {
             failure(error) => { return Result<Face, Error>.failure(public_error(error)) }
             success(data) => {
                 let digest = Crypto.sha256(@bytes[0:bytes.count()])
@@ -536,7 +536,7 @@ public class Face {
     }
 
     private static func bundled(bytes:uint8[], digest:str) Result<Face, Error> {
-        match Native.open(bytes, 0) {
+        match (try Native.open(bytes, 0)) {
             failure(error) => { return Result<Face, Error>.failure(public_error(error)) }
             success(data) => {
                 return Result<Face, Error>.success(Face(data, digest + "#0"))
@@ -544,41 +544,37 @@ public class Face {
         }
     }
 
-    static func try_open(bytes:uint8[], index:int = 0) Result<Face, Error> {
-        return Face.decode(bytes, face_index:index)
-    }
-
     static func open(path:Path, face_index:int = 0, maximum_bytes:int = 67108864) Result<Face, Error> {
-        match File.read_all(path, maximum_bytes) {
+        match (try File.read_all(path, maximum_bytes)) {
             failure(error) => {
                 return Result<Face, Error>.failure(Error(
                     kind:ErrorKind.file_read,
                     detail:error.detail
                 ))
             }
-            success(bytes) => { return Face.decode(bytes, face_index:face_index) }
+            success(bytes) => { return (try Face.decode(bytes, face_index:face_index)) }
         }
     }
 
     static func default() Result<Face, Error> {
-        return Face.bundled(
+        return (try Face.bundled(
             embed_bytes("../Assets/Fonts/NotoSans.ttf"),
             "bfb7bb691513f12e734dc346c03a03f784912432d7e3fa8e56efcf906fe86b3d"
-        )
+        ))
     }
 
     static func monospace() Result<Face, Error> {
-        return Face.bundled(
+        return (try Face.bundled(
             embed_bytes("../Assets/Fonts/NotoSansMono-Regular.ttf"),
             "65b5e2b2c4a1fba9ae8be1f026cb35b03dcb8886d9b2a4147054fde12f7e767d"
-        )
+        ))
     }
 
     static func pixel() Result<Face, Error> {
-        return Face.bundled(
+        return (try Face.bundled(
             embed_bytes("../Assets/Fonts/DepartureMono-Regular.otf"),
             "4d53f663155cf8bf7ffc8e688776e719625f7bbb80a8d90073438b249261a2e0"
-        )
+        ))
     }
 
     func identity() str { return self.stable_identity }
@@ -728,14 +724,14 @@ public class Instance {
                 detail:"font instance size must be positive and finite"
             ))
         }
-        match validated_variations(face, variations) {
+        match (try validated_variations(face, variations)) {
             failure(error) => { return Result<Instance, Error>.failure(error) }
             success(effective) => {
-                match Native.create_instance(face.native_handle()) {
+                match (try Native.create_instance(face.native_handle())) {
                     failure(error) => { return Result<Instance, Error>.failure(public_error(error)) }
                     success(handle) => {
                         for variation in effective {
-                            match Native.set_variation(handle, Native.tag(variation.tag), variation.value) {
+                            match (try Native.set_variation(handle, Native.tag(variation.tag), variation.value)) {
                                 failure(error) => {
                                     Native.close_instance(handle)
                                     return Result<Instance, Error>.failure(public_error(error))
@@ -801,13 +797,13 @@ public class Instance {
                 detail:"font glyph raster density must fit the supported 1/64-pixel range"
             ))
         }
-        match Native.raster_glyph(
+        match (try Native.raster_glyph(
             self.instance_handle,
             glyph_id,
             Math.round(physical_size_value) as int,
             hinting_code(options.hinting),
             antialiasing_code(options.antialiasing)
-        ) {
+        )) {
             failure(error) => {
                 return Result<GlyphCoverage?, Error>.failure(public_error(error))
             }
@@ -832,7 +828,7 @@ public class Instance {
         if cached = self.outline_cache.find(glyph_id) {
             return Result<GlyphOutline?, Error>.success(cached.outline)
         }
-        match Native.outline(self.instance_handle, glyph_id) {
+        match (try Native.outline(self.instance_handle, glyph_id)) {
             failure(error) => { return Result<GlyphOutline?, Error>.failure(public_error(error)) }
             success(data) => {
                 if value = data {
@@ -851,20 +847,20 @@ public class Instance {
     }
 
     func shape(text:str, options:ShapeOptions = ShapeOptions()) Result<GlyphRun, Error> {
-        match validated_shape(text, options) {
+        match (try validated_shape(text, options)) {
             failure(error) => { return Result<GlyphRun, Error>.failure(error) }
             success(validated) => {
                 if cached = self.shaping_cache.find(validated.key) {
                     return Result<GlyphRun, Error>.success(GlyphRun(self, cached))
                 }
-                match Native.shape(
+                match (try Native.shape(
                     self.instance_handle,
                     text,
                     validated.direction,
                     validated.script,
                     validated.language,
                     validated.features
-                ) {
+                )) {
                     failure(error) => { return Result<GlyphRun, Error>.failure(public_error(error)) }
                     success(shaped) => {
                         let data = glyph_run_data(self, validated.key, text, shaped)
@@ -1025,7 +1021,7 @@ public class GlyphRun {
         var result:PlacedOutline[] = []
         let size = self.instance_value.size()
         for glyph in self.data.glyphs {
-            match self.instance_value.outline(glyph.id) {
+            match (try self.instance_value.outline(glyph.id)) {
                 failure(error) => { return Result<PlacedOutline[], Error>.failure(error) }
                 success(outline) => {
                     result.append(PlacedOutline(
@@ -1050,7 +1046,7 @@ public class GlyphRun {
     }
 
     func rasterize(options:RasterOptions = RasterOptions()) Result<Coverage, Error> {
-        return rasterize_run(self.instance_value, self.data, options)
+        return (try rasterize_run(self.instance_value, self.data, options))
     }
 }
 
@@ -1118,7 +1114,7 @@ func rasterize_run(instance:Instance, data:GlyphRunData, options:RasterOptions) 
         ))
     }
 
-    match Native.raster_coverage(
+    match (try Native.raster_coverage(
         instance.native_handle(),
         glyphs,
         physical_size,
@@ -1126,7 +1122,7 @@ func rasterize_run(instance:Instance, data:GlyphRunData, options:RasterOptions) 
         antialiasing,
         options.padding,
         options.maximum_pixels
-    ) {
+    )) {
         failure(error) => {
             match error.kind {
                 invalid_input => {

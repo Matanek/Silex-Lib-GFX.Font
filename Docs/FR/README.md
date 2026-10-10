@@ -13,7 +13,8 @@ variation et les synthèses explicitement demandées.
 silex install GFX.Font
 ```
 
-GFX.Font demande Silex 0.43.0 ou une version plus récente.
+Cette révision en développement requiert la toolchain avec capture
+`try` des opérations `Result` et extraction lors de l’appel ordinaire.
 
 ## Charger une face
 
@@ -25,7 +26,7 @@ si le fichier est ensuite déplacé ou supprimé.
 use GFX.Font
 
 let bytes = embed_bytes("InterVariable.ttf")
-match Font.Face.decode(bytes) {
+match try Font.Face.decode(bytes) {
     failure(error) => { print(error.detail) }
     success(face) => {
         print(face.identity())
@@ -63,10 +64,10 @@ descender est normalement négatif.
 infinie ou NaN et toute coordonnée invalide.
 
 ```sx
-match Font.Face.decode(embed_bytes("InterVariable.ttf")) {
+match try Font.Face.decode(embed_bytes("InterVariable.ttf")) {
     failure(error) => { print(error.detail) }
     success(face) => {
-        match Font.Instance.create(
+        match try Font.Instance.create(
             face,
             size:18.0,
             variations:[Font.Variation("wght", 560.0)]
@@ -105,7 +106,7 @@ glyphes positionnés et ses mesures. L’appel est faillible parce que les tags 
 plages de features dépendent du texte réellement façonné.
 
 ```sx
-match instance.shape(
+match try instance.shape(
     "office",
     Font.ShapeOptions(
         direction:Font.Direction.left_to_right,
@@ -176,10 +177,10 @@ analytiques, l’avance nominale est accessible, et `fill_rule` vaut
 explicitement `non_zero` afin que les contreformes restent des trous.
 
 ```sx
-match instance.shape("Bé") {
+match try instance.shape("Bé") {
     failure(error) => { print(error.detail) }
     success(run) => {
-        match run.outlines() {
+        match try run.outlines() {
             failure(error) => { print(error.detail) }
             success(placed) => {
                 for glyph in placed {
@@ -222,7 +223,7 @@ géométriques.
 pixels physiques de marge :
 
 ```sx
-match run.rasterize(Font.RasterOptions(
+match try run.rasterize(Font.RasterOptions(
     density:2.0,
     hinting:Font.Hinting.normal,
     antialiasing:Font.Antialiasing.grayscale,

@@ -5,12 +5,12 @@ use Interop.C
 
 func exercise_native_lifetimes() {
     let bytes = embed_bytes("Fixtures/Minimal.ttf")
-    match Font.Face.decode(bytes) {
+    match (try Font.Face.decode(bytes)) {
         failure(error) => { panic(error.detail) }
         success(face) => {
             assert(Native.live_library_count() == 1)
             assert(Native.live_face_count() == 1)
-            match Font.Instance.create(face, size:16.0) {
+            match (try Font.Instance.create(face, size:16.0)) {
                 failure(error) => { panic(error.detail) }
                 success(instance) => {
                     assert(Native.live_instance_count() == 1)
@@ -41,14 +41,14 @@ test "verify ABI v5 and release every native lifetime" {
 }
 
 test "raster cache reuses physical glyphs across runs and releases transient handles" {
-    match Font.Face.monospace() {
+    match (try Font.Face.monospace()) {
         failure(error) => { panic(error.detail) }
         success(face) => {
-            match Font.Instance.create(face, size:14.0) {
+            match (try Font.Instance.create(face, size:14.0)) {
                 failure(error) => { panic(error.detail) }
                 success(instance) => {
                     var first = require_run(instance, "terminal terminal", Font.ShapeOptions())
-                    match first.rasterize() {
+                    match (try first.rasterize()) {
                         failure(error) => { panic(error.detail) }
                         success(coverage) => { assert(!coverage.is_empty()) }
                     }
@@ -57,13 +57,13 @@ test "raster cache reuses physical glyphs across runs and releases transient han
                     assert(after_cold < first.glyph_count())
                     assert(Native.live_bitmap_count() == 0)
                     assert(Native.live_coverage_count() == 0)
-                    match first.rasterize() {
+                    match (try first.rasterize()) {
                         failure(error) => { panic(error.detail) }
                         success(coverage) => { assert(!coverage.is_empty()) }
                     }
                     assert(face.native_bitmap_rasterization_count() == after_cold)
                     var second = require_run(instance, "later terminal", Font.ShapeOptions())
-                    match second.rasterize() {
+                    match (try second.rasterize()) {
                         failure(error) => { panic(error.detail) }
                         success(coverage) => { assert(!coverage.is_empty()) }
                     }
@@ -79,20 +79,20 @@ test "raster cache reuses physical glyphs across runs and releases transient han
 }
 
 test "native face shares cached coverage source across immutable instances" {
-    match Font.Face.monospace() {
+    match (try Font.Face.monospace()) {
         failure(error) => { panic(error.detail) }
         success(face) => {
-            match Font.Instance.create(face, size:14.0) {
+            match (try Font.Instance.create(face, size:14.0)) {
                 failure(error) => { panic(error.detail) }
                 success(first) => {
                     var run = require_run(first, "cache", Font.ShapeOptions())
-                    match run.rasterize() { failure(error) => { panic(error.detail) }; success(coverage) => {} }
+                    match (try run.rasterize()) { failure(error) => { panic(error.detail) }; success(coverage) => {} }
                     let after_first = face.native_bitmap_rasterization_count()
-                    match Font.Instance.create(face, size:14.0) {
+                    match (try Font.Instance.create(face, size:14.0)) {
                         failure(error) => { panic(error.detail) }
                         success(second) => {
                             var repeated = require_run(second, "cache", Font.ShapeOptions())
-                            match repeated.rasterize() { failure(error) => { panic(error.detail) }; success(coverage) => {} }
+                            match (try repeated.rasterize()) { failure(error) => { panic(error.detail) }; success(coverage) => {} }
                             assert(face.native_bitmap_rasterization_count() == after_first)
                             assert(Native.live_bitmap_count() == 0)
                             assert(Native.live_coverage_count() == 0)
@@ -105,17 +105,17 @@ test "native face shares cached coverage source across immutable instances" {
 }
 
 test "run coverage composes the glyph IDs produced by shaping" {
-    match Font.Face.decode(embed_bytes("Fixtures/Minimal.ttf")) {
+    match (try Font.Face.decode(embed_bytes("Fixtures/Minimal.ttf"))) {
         failure(error) => { panic(error.detail) }
         success(face) => {
-            match Font.Instance.create(face, size:17.0) {
+            match (try Font.Instance.create(face, size:17.0)) {
                 failure(error) => { panic(error.detail) }
                 success(instance) => {
                     var single = require_run(instance, "A", Font.ShapeOptions())
                     var pair = require_run(instance, "AA", Font.ShapeOptions())
                     assert(pair.glyphs()[0].id == single.glyphs()[0].id)
                     assert(pair.glyphs()[1].id == single.glyphs()[0].id)
-                    match Native.raster_glyph(instance.native_handle(), single.glyphs()[0].id, 17 * 64, 2, 0) {
+                    match (try Native.raster_glyph(instance.native_handle(), single.glyphs()[0].id, 17 * 64, 2, 0)) {
                         failure(error) => { panic(error.detail) }
                         success(bitmap) => {
                             if value = bitmap {
@@ -125,7 +125,7 @@ test "run coverage composes the glyph IDs produced by shaping" {
                                     glyph_sum += C.byte_at(value.pixels, pixel as C.Size) as int
                                     pixel++
                                 }
-                                match pair.rasterize() {
+                                match (try pair.rasterize()) {
                                     failure(error) => { panic(error.detail) }
                                     success(coverage) => {
                                         var run_sum = 0
@@ -146,14 +146,14 @@ test "run coverage composes the glyph IDs produced by shaping" {
 }
 
 test "coverage allocation rejection releases transient native handles" {
-    match Font.Face.monospace() {
+    match (try Font.Face.monospace()) {
         failure(error) => { panic(error.detail) }
         success(face) => {
-            match Font.Instance.create(face, size:14.0) {
+            match (try Font.Instance.create(face, size:14.0)) {
                 failure(error) => { panic(error.detail) }
                 success(instance) => {
                     var run = require_run(instance, "this coverage cannot fit in one pixel", Font.ShapeOptions())
-                    match run.rasterize(Font.RasterOptions(maximum_pixels:1)) {
+                    match (try run.rasterize(Font.RasterOptions(maximum_pixels:1))) {
                         success(coverage) => { panic("coverage limit was ignored") }
                         failure(error) => {
                             match error.kind {
@@ -171,10 +171,10 @@ test "coverage allocation rejection releases transient native handles" {
 }
 
 test "glyph cache evicts by bytes under a large-glyph churn" {
-    match Font.Face.monospace() {
+    match (try Font.Face.monospace()) {
         failure(error) => { panic(error.detail) }
         success(face) => {
-            match Font.Instance.create(face, size:1000.0) {
+            match (try Font.Instance.create(face, size:1000.0)) {
                 failure(error) => { panic(error.detail) }
                 success(instance) => {
                     var run = require_run(
@@ -183,7 +183,7 @@ test "glyph cache evicts by bytes under a large-glyph churn" {
                         Font.ShapeOptions()
                     )
                     for glyph in run.glyphs() {
-                        match Native.raster_glyph(instance.native_handle(), glyph.id, 1000 * 64, 2, 0) {
+                        match (try Native.raster_glyph(instance.native_handle(), glyph.id, 1000 * 64, 2, 0)) {
                             failure(error) => { panic(error.detail) }
                             success(bitmap) => {}
                         }
@@ -200,10 +200,10 @@ test "glyph cache evicts by bytes under a large-glyph churn" {
 }
 
 test "run coverage cache evicts historical terminal lines by bytes" {
-    match Font.Face.monospace() {
+    match (try Font.Face.monospace()) {
         failure(error) => { panic(error.detail) }
         success(face) => {
-            match Font.Instance.create(face, size:14.0) {
+            match (try Font.Instance.create(face, size:14.0)) {
                 failure(error) => { panic(error.detail) }
                 success(instance) => {
                     var line = 0
@@ -213,7 +213,7 @@ test "run coverage cache evicts historical terminal lines by bytes" {
                             text = text + "0123456789abcdef"
                         }
                         var run = require_run(instance, text, Font.ShapeOptions())
-                        match run.rasterize() {
+                        match (try run.rasterize()) {
                             failure(error) => { panic(error.detail) }
                             success(coverage) => { assert(!coverage.is_empty()) }
                         }
@@ -234,12 +234,12 @@ struct RasterReadJob:Threading.Job {
 
     func execute() {
         var total = 0
-        match Font.Instance.create(self.face, size:14.0) {
+        match (try Font.Instance.create(self.face, size:14.0)) {
             failure(error) => { panic(error.detail) }
             success(instance) => {
                 var run = require_run(instance, "concurrent terminal 0123456789", Font.ShapeOptions())
                 for iteration in 0...25 {
-                    match run.rasterize() {
+                    match (try run.rasterize()) {
                         failure(error) => { panic(error.detail) }
                         success(coverage) => { total += coverage.byte_count() }
                     }
@@ -251,7 +251,7 @@ struct RasterReadJob:Threading.Job {
 }
 
 test "shared face bitmap cache supports concurrent immutable instances" {
-    match Font.Face.monospace() {
+    match (try Font.Face.monospace()) {
         failure(error) => { panic(error.detail) }
         success(face) => {
             var executor = Threading.Executor(worker_count:4)
@@ -274,21 +274,21 @@ test "shared face bitmap cache supports concurrent immutable instances" {
 }
 
 test "outline cache ignores logical size and releases transient handles" {
-    match Font.Face.default() {
+    match (try Font.Face.default()) {
         failure(error) => { panic(error.detail) }
         success(face) => {
             var small = require_instance(face)
-            match Font.Instance.create(face, size:48.0) {
+            match (try Font.Instance.create(face, size:48.0)) {
                 failure(error) => { panic(error.detail) }
                 success(large) => {
                     let glyph = require_run(small, "A", Font.ShapeOptions()).glyphs()[0].id
-                    match small.outline(glyph) { failure(error) => { panic(error.detail) }; success(outline) => {} }
+                    match (try small.outline(glyph)) { failure(error) => { panic(error.detail) }; success(outline) => {} }
                     assert(Native.live_outline_count() == 0)
                     assert(face.native_outline_decomposition_count() == 1)
-                    match large.outline(glyph) { failure(error) => { panic(error.detail) }; success(outline) => {} }
+                    match (try large.outline(glyph)) { failure(error) => { panic(error.detail) }; success(outline) => {} }
                     assert(Native.live_outline_count() == 0)
                     assert(face.native_outline_decomposition_count() == 1)
-                    match large.outline((face.glyph_count() + 1) as uint32) {
+                    match (try large.outline((face.glyph_count() + 1) as uint32)) {
                         failure(error) => { panic(error.detail) }
                         success(outline) => {}
                     }
@@ -301,20 +301,20 @@ test "outline cache ignores logical size and releases transient handles" {
 }
 
 test "outline callback allocation failure releases partial state" {
-    match Font.Face.default() {
+    match (try Font.Face.default()) {
         failure(error) => { panic(error.detail) }
         success(face) => {
             var instance = require_instance(face)
             let glyph = require_run(instance, "B", Font.ShapeOptions()).glyphs()[0].id
             Native.fail_outline_after_for_test(1)
-            match instance.outline(glyph) {
+            match (try instance.outline(glyph)) {
                 success(outline) => { panic("injected outline allocation failure succeeded") }
                 failure(error) => { match error.kind { out_of_memory => {}; else => { panic(error.detail) } } }
             }
             Native.fail_outline_after_for_test(0)
             assert(Native.live_outline_count() == 0)
             assert(face.native_outline_decomposition_count() == 0)
-            match instance.outline(glyph) {
+            match (try instance.outline(glyph)) {
                 failure(error) => { panic(error.detail) }
                 success(outline) => { if outline == null { panic("outline stayed unavailable after fault reset") } }
             }
@@ -333,7 +333,7 @@ struct OutlineReadJob:Threading.Job {
         let glyph = require_run(instance, "O", Font.ShapeOptions()).glyphs()[0].id
         var total = 0
         for iteration in 0...100 {
-            match instance.outline(glyph) {
+            match (try instance.outline(glyph)) {
                 failure(error) => { panic(error.detail) }
                 success(outline) => {
                     if value = outline { total += value.contours.count() }
@@ -346,7 +346,7 @@ struct OutlineReadJob:Threading.Job {
 }
 
 test "shared face outline cache is safe across immutable instances" {
-    match Font.Face.default() {
+    match (try Font.Face.default()) {
         failure(error) => { panic(error.detail) }
         success(face) => {
             var executor = Threading.Executor(worker_count:4)
@@ -369,21 +369,21 @@ test "shared face outline cache is safe across immutable instances" {
 }
 
 func require_instance(face:Font.Face) Font.Instance {
-    match Font.Instance.create(face, size:1000.0) {
+    match (try Font.Instance.create(face, size:1000.0)) {
         failure(error) => { panic(error.detail) }
         success(instance) => { return instance }
     }
 }
 
 func require_run(instance:Font.Instance, text:str, options:Font.ShapeOptions) Font.GlyphRun {
-    match instance.shape(text, options) {
+    match (try instance.shape(text, options)) {
         failure(error) => { panic(error.detail) }
         success(run) => { return run }
     }
 }
 
 test "cache reuses one native shape and distinguishes features" {
-    match Font.Face.default() {
+    match (try Font.Face.default()) {
         failure(error) => { panic(error.detail) }
         success(face) => {
             var instance = require_instance(face)
@@ -408,7 +408,7 @@ test "cache reuses one native shape and distinguishes features" {
             assert(disabled.glyph_count() == 6)
             assert(instance.native_shape_count() == 2)
 
-            match Font.Instance.create(face, size:1000.0, variations:[Font.Variation("wght", 900.0)]) {
+            match (try Font.Instance.create(face, size:1000.0, variations:[Font.Variation("wght", 900.0)])) {
                 failure(error) => { panic(error.detail) }
                 success(black) => {
                     var varied = require_run(black, "office", enabled)
@@ -422,7 +422,7 @@ test "cache reuses one native shape and distinguishes features" {
 }
 
 test "native boundary rejects invalid UTF-8 before HarfBuzz" {
-    match Font.Face.default() {
+    match (try Font.Face.default()) {
         failure(error) => { panic(error.detail) }
         success(face) => {
             var instance = require_instance(face)

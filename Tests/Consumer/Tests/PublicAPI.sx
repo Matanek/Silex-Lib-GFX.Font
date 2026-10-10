@@ -20,14 +20,14 @@ func require_instance(result:Result<Font.Instance, Font.Error>) Font.Instance {
 }
 
 func write_font(path:str, bytes:uint8[]) {
-    match File.write_all(path, @bytes[0:bytes.count()]) {
+    match (try File.write_all(path, @bytes[0:bytes.count()])) {
         failure(error) => { panic(error.detail) }
         success => {}
     }
 }
 
 func remove_font(path:str) {
-    match FileSystem.remove_file(path) {
+    match (try FileSystem.remove_file(path)) {
         failure(error) => { panic(error.detail) }
         success => {}
     }
@@ -65,8 +65,8 @@ test "path and bytes share a stable face identity after file removal" {
     let bytes = embed_bytes("../../Fixtures/Minimal.ttf")
     let path = "Packages/GFX.Font/Tests/Consumer/Tests/TemporaryFace.ttf"
     write_font(path, bytes)
-    var from_path = require_face(Font.Face.open(path))
-    var from_bytes = require_face(Font.Face.decode(bytes))
+    var from_path = require_face((try Font.Face.open(path)))
+    var from_bytes = require_face((try Font.Face.decode(bytes)))
     assert(from_path.identity() == from_bytes.identity())
     remove_font(path)
     assert(from_path.metrics().units_per_em == 1000)
@@ -75,14 +75,14 @@ test "path and bytes share a stable face identity after file removal" {
 
 test "TTC selects two valid faces and refuses a third" {
     let bytes = embed_bytes("../../Fixtures/TwoFaces.ttc")
-    var first = require_face(Font.Face.decode(bytes, face_index:0))
-    var second = require_face(Font.Face.decode(bytes, face_index:1))
+    var first = require_face((try Font.Face.decode(bytes, face_index:0)))
+    var second = require_face((try Font.Face.decode(bytes, face_index:1)))
     assert(first.face_count() == 2)
     assert(second.face_count() == 2)
     assert(require_family(first) == "Noto Sans")
     assert(require_family(second) == "Noto Sans Mono")
     assert(first.identity() != second.identity())
-    match Font.Face.decode(bytes, face_index:2) {
+    match (try Font.Face.decode(bytes, face_index:2)) {
         success(face) => { panic("a third TTC face was accepted") }
         failure(error) => {
             match error.kind {
@@ -94,8 +94,8 @@ test "TTC selects two valid faces and refuses a third" {
 }
 
 test "TrueType and CFF faces expose names coverage and em metrics" {
-    var ttf_face = require_face(Font.Face.decode(embed_bytes("../../Fixtures/Minimal.ttf")))
-    var cff_face = require_face(Font.Face.decode(embed_bytes("../../Fixtures/SourceCodePro-Regular.otf")))
+    var ttf_face = require_face((try Font.Face.decode(embed_bytes("../../Fixtures/Minimal.ttf"))))
+    var cff_face = require_face((try Font.Face.decode(embed_bytes("../../Fixtures/SourceCodePro-Regular.otf"))))
     match ttf_face.outline_kind() { quadratic => {}; else => { panic("TTF outline kind is not quadratic") } }
     match cff_face.outline_kind() { cubic => {}; else => { panic("OTF outline kind is not cubic") } }
     assert(ttf_face.capabilities().outlines)
@@ -111,7 +111,7 @@ test "TrueType and CFF faces expose names coverage and em metrics" {
 }
 
 test "variable axes named instances identities and bounds are effective" {
-    var face = require_face(Font.Face.default())
+    var face = require_face((try Font.Face.default()))
     assert(face.capabilities().variations)
     if axis = find_axis(face, "wght") {
         assert(axis.minimum <= 100.0)
@@ -121,8 +121,8 @@ test "variable axes named instances identities and bounds are effective" {
     assert(face.named_instances().count() > 1)
     if name = face.named_instances()[0].name { assert(name != "") } else { panic("named instance has no inspectable name") }
 
-    var light = require_instance(Font.Instance.create(face, size:18.0, variations:[Font.Variation("wght", 100.0)]))
-    var black = require_instance(Font.Instance.create(face, size:18.0, variations:[Font.Variation("wght", 900.0)]))
+    var light = require_instance((try Font.Instance.create(face, size:18.0, variations:[Font.Variation("wght", 100.0)])))
+    var black = require_instance((try Font.Instance.create(face, size:18.0, variations:[Font.Variation("wght", 900.0)])))
     assert(light.identity() != black.identity())
     if light_bounds = light.scalar_bounds(65 as uint32) {
         if black_bounds = black.scalar_bounds(65 as uint32) {
@@ -136,14 +136,14 @@ test "logical sizes scale metrics and preserve face identity" {
     assert(intent.weight == 560)
     assert(intent.width == 90.0)
     match intent.slant { oblique => {}; else => { panic("style slant intention was not preserved") } }
-    var face = require_face(Font.Face.default())
-    var small = require_instance(Font.Instance.create(face, size:12.0))
-    var large = require_instance(Font.Instance.create(face, size:24.0))
-    var synthesized = require_instance(Font.Instance.create(
+    var face = require_face((try Font.Face.default()))
+    var small = require_instance((try Font.Instance.create(face, size:12.0)))
+    var large = require_instance((try Font.Instance.create(face, size:24.0)))
+    var synthesized = require_instance((try Font.Instance.create(
         face,
         size:12.0,
         synthesis:Font.Synthesis(embolden:true)
-    ))
+    )))
     assert(small.face().identity() == large.face().identity())
     assert(Math.abs(large.metrics().ascender - small.metrics().ascender * 2.0) < 0.000001)
     assert(Math.abs(large.metrics().line_height - small.metrics().line_height * 2.0) < 0.000001)
@@ -152,47 +152,47 @@ test "logical sizes scale metrics and preserve face identity" {
 }
 
 test "invalid instance inputs return typed errors" {
-    var face = require_face(Font.Face.default())
-    match Font.Instance.create(face, size:0.0) {
+    var face = require_face((try Font.Face.default()))
+    match (try Font.Instance.create(face, size:0.0)) {
         success(instance) => { panic("zero size was accepted") }
         failure(error) => { match error.kind { invalid_size => {}; else => { panic("zero size returned the wrong error") } } }
     }
-    match Font.Instance.create(face, size:0.0 / 0.0) {
+    match (try Font.Instance.create(face, size:0.0 / 0.0)) {
         success(instance) => { panic("NaN size was accepted") }
         failure(error) => { match error.kind { invalid_size => {}; else => { panic("NaN size returned the wrong error") } } }
     }
-    match Font.Instance.create(face, size:18.0, variations:[Font.Variation("wght", 400.0), Font.Variation("wght", 500.0)]) {
+    match (try Font.Instance.create(face, size:18.0, variations:[Font.Variation("wght", 400.0), Font.Variation("wght", 500.0)])) {
         success(instance) => { panic("duplicate axis was accepted") }
         failure(error) => { match error.kind { duplicate_axis => {}; else => { panic("duplicate axis returned the wrong error") } } }
     }
-    match Font.Instance.create(face, size:18.0, variations:[Font.Variation("bad", 1.0)]) {
+    match (try Font.Instance.create(face, size:18.0, variations:[Font.Variation("bad", 1.0)])) {
         success(instance) => { panic("short tag was accepted") }
         failure(error) => { match error.kind { invalid_tag => {}; else => { panic("short tag returned the wrong error") } } }
     }
-    match Font.Instance.create(face, size:18.0, variations:[Font.Variation("XXXX", 1.0)]) {
+    match (try Font.Instance.create(face, size:18.0, variations:[Font.Variation("XXXX", 1.0)])) {
         success(instance) => { panic("unknown axis was accepted") }
         failure(error) => { match error.kind { unknown_axis => {}; else => { panic("unknown axis returned the wrong error") } } }
     }
-    match Font.Instance.create(face, size:18.0, variations:[Font.Variation("wght", 5000.0)]) {
+    match (try Font.Instance.create(face, size:18.0, variations:[Font.Variation("wght", 5000.0)])) {
         success(instance) => { panic("out-of-range coordinate was accepted") }
         failure(error) => { match error.kind { variation_out_of_range => {}; else => { panic("out-of-range coordinate returned the wrong error") } } }
     }
-    match Font.Instance.create(face, size:18.0, variations:[Font.Variation("wght", 0.0 / 0.0)]) {
+    match (try Font.Instance.create(face, size:18.0, variations:[Font.Variation("wght", 0.0 / 0.0)])) {
         success(instance) => { panic("NaN coordinate was accepted") }
         failure(error) => { match error.kind { variation_out_of_range => {}; else => { panic("NaN coordinate returned the wrong error") } } }
     }
 }
 
 test "missing files and corrupt bytes return distinct errors" {
-    match Font.Face.open("Tests/DefinitelyMissing.ttf") {
+    match (try Font.Face.open("Tests/DefinitelyMissing.ttf")) {
         success(face) => { panic("missing file was accepted") }
         failure(error) => { match error.kind { file_read => {}; else => { panic("missing file returned the wrong error") } } }
     }
-    match Font.Face.decode([0 as uint8, 1 as uint8, 2 as uint8, 3 as uint8]) {
+    match (try Font.Face.decode([0 as uint8, 1 as uint8, 2 as uint8, 3 as uint8])) {
         success(face) => { panic("corrupt bytes were accepted") }
         failure(error) => { match error.kind { invalid_data => {}; else => { panic("corrupt bytes returned the wrong error") } } }
     }
-    match Font.Face.decode([]) {
+    match (try Font.Face.decode([])) {
         success(face) => { panic("empty bytes were accepted") }
         failure(error) => { match error.kind { empty_data => {}; else => { panic("empty bytes returned the wrong error") } } }
     }
@@ -205,9 +205,9 @@ test "bundled default monospace and pixel assets have stable digests and coverag
     assert(Crypto.sha256(@default_bytes[0:default_bytes.count()]) == "bfb7bb691513f12e734dc346c03a03f784912432d7e3fa8e56efcf906fe86b3d")
     assert(Crypto.sha256(@mono_bytes[0:mono_bytes.count()]) == "65b5e2b2c4a1fba9ae8be1f026cb35b03dcb8886d9b2a4147054fde12f7e767d")
     assert(Crypto.sha256(@pixel_bytes[0:pixel_bytes.count()]) == "4d53f663155cf8bf7ffc8e688776e719625f7bbb80a8d90073438b249261a2e0")
-    var default_face = require_face(Font.Face.default())
-    var mono_face = require_face(Font.Face.monospace())
-    var pixel_face = require_face(Font.Face.pixel())
+    var default_face = require_face((try Font.Face.default()))
+    var mono_face = require_face((try Font.Face.monospace()))
+    var pixel_face = require_face((try Font.Face.pixel()))
     assert(default_face.identity() == "bfb7bb691513f12e734dc346c03a03f784912432d7e3fa8e56efcf906fe86b3d#0")
     assert(mono_face.identity() == "65b5e2b2c4a1fba9ae8be1f026cb35b03dcb8886d9b2a4147054fde12f7e767d#0")
     assert(pixel_face.identity() == "4d53f663155cf8bf7ffc8e688776e719625f7bbb80a8d90073438b249261a2e0#0")
@@ -218,15 +218,15 @@ test "bundled default monospace and pixel assets have stable digests and coverag
     assert(pixel_face.supports(0x00e7 as uint32))
     assert(pixel_face.supports(0x0153 as uint32))
 
-    var pixel = require_instance(Font.Instance.create(pixel_face, size:22.0))
-    match pixel.shape("Écran redimensionné — difficulté très élevée, cœur et œuvre") {
+    var pixel = require_instance((try Font.Instance.create(pixel_face, size:22.0)))
+    match (try pixel.shape("Écran redimensionné — difficulté très élevée, cœur et œuvre")) {
         failure(error) => { panic(error.detail) }
         success(run) => { assert(run.missing_glyph_count() == 0) }
     }
 }
 
 test "same face supports repeated concurrent immutable reads" {
-    var face = require_face(Font.Face.default())
+    var face = require_face((try Font.Face.default()))
     var executor = Threading.Executor(worker_count:4)
     var first = executor.submit(FaceReadJob(face:face, checksum:0.0))
     var second = executor.submit(FaceReadJob(face:face, checksum:0.0))

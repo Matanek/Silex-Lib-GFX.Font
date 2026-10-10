@@ -9,14 +9,14 @@ func shaping_face(result:Result<Font.Face, Font.Error>) Font.Face {
 }
 
 func shaping_instance(face:Font.Face, size:float64 = 1000.0) Font.Instance {
-    match Font.Instance.create(face, size:size) {
+    match (try Font.Instance.create(face, size:size)) {
         failure(error) => { panic(error.detail) }
         success(instance) => { return instance }
     }
 }
 
 func shaped(instance:Font.Instance, text:str, options:Font.ShapeOptions = Font.ShapeOptions()) Font.GlyphRun {
-    match instance.shape(text, options) {
+    match (try instance.shape(text, options)) {
         failure(error) => { panic(error.detail) }
         success(run) => { return run }
     }
@@ -34,7 +34,7 @@ func approximate(actual:float64, expected:float64) bool {
 }
 
 test "Latin ligature matches the pinned HarfBuzz oracle" {
-    var instance = shaping_instance(shaping_face(Font.Face.default()))
+    var instance = shaping_instance(shaping_face((try Font.Face.default())))
     var run = shaped(instance, "office", Font.ShapeOptions(
         direction:Font.Direction.left_to_right,
         script:"Latn",
@@ -60,7 +60,7 @@ test "Latin ligature matches the pinned HarfBuzz oracle" {
 }
 
 test "combining marks share one cluster without adding advance" {
-    var instance = shaping_instance(shaping_face(Font.Face.default()))
+    var instance = shaping_instance(shaping_face((try Font.Face.default())))
     var run = shaped(instance, "a\u{0323}\u{0301}", Font.ShapeOptions(
         direction:Font.Direction.left_to_right,
         script:"Latn",
@@ -77,18 +77,18 @@ test "combining marks share one cluster without adding advance" {
 }
 
 test "place shaped grapheme clusters on an explicit grid" {
-    var instance = shaping_instance(shaping_face(Font.Face.default()), size:16.0)
+    var instance = shaping_instance(shaping_face((try Font.Face.default())), size:16.0)
     var run = shaped(instance, "ae\u{301}b", Font.ShapeOptions(features:[
         Font.Feature("liga", 0),
         Font.Feature("clig", 0),
         Font.Feature("calt", 0),
         Font.Feature("kern", 0)
     ]))
-    var grid = placed(run.place_clusters(
+    var grid = placed((try run.place_clusters(
         [0, 1, 4],
         [Font.Position(x:0.0, y:0.0), Font.Position(x:10.0, y:0.0), Font.Position(x:20.0, y:0.0)],
         Font.Position(x:30.0, y:0.0)
-    ))
+    )))
     assert(grid.metrics().advance.x == 30.0)
     assert(grid.glyphs()[0].origin_x < 10.0)
     assert(grid.glyphs()[-1].origin_x >= 20.0)
@@ -96,7 +96,7 @@ test "place shaped grapheme clusters on an explicit grid" {
 }
 
 test "Devanagari Greek Cyrillic and variation selectors retain scalar clusters" {
-    var instance = shaping_instance(shaping_face(Font.Face.default()))
+    var instance = shaping_instance(shaping_face((try Font.Face.default())))
     var devanagari = shaped(instance, "देवनागरी", Font.ShapeOptions(
         direction:Font.Direction.left_to_right,
         script:"Deva",
@@ -123,7 +123,7 @@ test "Devanagari Greek Cyrillic and variation selectors retain scalar clusters" 
 }
 
 test "Arabic RTL glyph order preserves descending UTF-8 clusters" {
-    var face = shaping_face(Font.Face.decode(embed_bytes("../../Fixtures/NotoSansArabic-Test.ttf")))
+    var face = shaping_face((try Font.Face.decode(embed_bytes("../../Fixtures/NotoSansArabic-Test.ttf"))))
     var instance = shaping_instance(face)
     var run = shaped(instance, "العربية", Font.ShapeOptions(
         direction:Font.Direction.right_to_left,
@@ -146,7 +146,7 @@ test "Arabic RTL glyph order preserves descending UTF-8 clusters" {
 }
 
 test "vertical direction produces positioned glyphs on the Y axis" {
-    var instance = shaping_instance(shaping_face(Font.Face.default()))
+    var instance = shaping_instance(shaping_face((try Font.Face.default())))
     var run = shaped(instance, "vertical", Font.ShapeOptions(
         direction:Font.Direction.top_to_bottom,
         script:"Latn",
@@ -161,7 +161,7 @@ test "vertical direction produces positioned glyphs on the Y axis" {
 }
 
 test "empty spaces and notdef distinguish logical advance from ink" {
-    var instance = shaping_instance(shaping_face(Font.Face.default()), size:20.0)
+    var instance = shaping_instance(shaping_face((try Font.Face.default())), size:20.0)
     var empty = shaped(instance, "")
     assert(empty.glyph_count() == 0)
     assert(empty.metrics().advance.x == 0.0)
@@ -180,7 +180,7 @@ test "empty spaces and notdef distinguish logical advance from ink" {
 }
 
 func retained_run() Font.GlyphRun {
-    var instance = shaping_instance(shaping_face(Font.Face.default()), size:18.0)
+    var instance = shaping_instance(shaping_face((try Font.Face.default())), size:18.0)
     return shaped(instance, "retained", Font.ShapeOptions(language:"en"))
 }
 
@@ -193,24 +193,24 @@ test "run owns copied text glyphs and positions after native buffers are gone" {
 }
 
 test "invalid shaping options return deterministic typed errors" {
-    var instance = shaping_instance(shaping_face(Font.Face.default()))
-    match instance.shape("line\nbreak") {
+    var instance = shaping_instance(shaping_face((try Font.Face.default())))
+    match (try instance.shape("line\nbreak")) {
         success(run) => { panic("a line break entered one homogeneous run") }
         failure(error) => { match error.kind { invalid_text => {}; else => { panic("line break returned the wrong error") } } }
     }
-    match instance.shape("é", Font.ShapeOptions(features:[Font.Feature("liga", 1, start:1)])) {
+    match (try instance.shape("é", Font.ShapeOptions(features:[Font.Feature("liga", 1, start:1)]))) {
         success(run) => { panic("a feature range split one UTF-8 scalar") }
         failure(error) => { match error.kind { invalid_feature_range => {}; else => { panic("split scalar returned the wrong error") } } }
     }
-    match instance.shape("office", Font.ShapeOptions(features:[Font.Feature("bad", 1)])) {
+    match (try instance.shape("office", Font.ShapeOptions(features:[Font.Feature("bad", 1)]))) {
         success(run) => { panic("a short feature tag was accepted") }
         failure(error) => { match error.kind { invalid_tag => {}; else => { panic("short feature tag returned the wrong error") } } }
     }
-    match instance.shape("office", Font.ShapeOptions(script:"Latin")) {
+    match (try instance.shape("office", Font.ShapeOptions(script:"Latin"))) {
         success(run) => { panic("a long script tag was accepted") }
         failure(error) => { match error.kind { invalid_tag => {}; else => { panic("long script tag returned the wrong error") } } }
     }
-    match instance.shape("office", Font.ShapeOptions(language:"fr--CA")) {
+    match (try instance.shape("office", Font.ShapeOptions(language:"fr--CA"))) {
         success(run) => { panic("an invalid language tag was accepted") }
         failure(error) => { match error.kind { invalid_language => {}; else => { panic("invalid language returned the wrong error") } } }
     }

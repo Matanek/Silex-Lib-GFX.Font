@@ -36,18 +36,18 @@ func report(label:str, coverage:Font.Coverage) {
 }
 
 func main() {
-    var latin_face = require_face(Font.Face.decode(embed_bytes("../Tests/Fixtures/Minimal.ttf")))
-    var latin = require_instance(Font.Instance.create(latin_face, size:17.0))
-    report("latin", require_coverage(require_run(latin.shape("Ag office")).rasterize()))
-    report("mark", require_coverage(require_run(latin.shape("e\u{301}")).rasterize()))
-    report("negative", require_coverage(require_run(latin.shape("j")).rasterize()))
-    report("below-baseline", require_coverage(require_run(latin.shape("_")).rasterize()))
+    var latin_face = require_face((try Font.Face.decode(embed_bytes("../Tests/Fixtures/Minimal.ttf"))))
+    var latin = require_instance((try Font.Instance.create(latin_face, size:17.0)))
+    report("latin", require_coverage((try require_run((try latin.shape("Ag office"))).rasterize())))
+    report("mark", require_coverage((try require_run((try latin.shape("e\u{301}"))).rasterize())))
+    report("negative", require_coverage((try require_run((try latin.shape("j"))).rasterize())))
+    report("below-baseline", require_coverage((try require_run((try latin.shape("_"))).rasterize())))
 
-    var arabic_face = require_face(Font.Face.decode(embed_bytes("../Tests/Fixtures/NotoSansArabic-Test.ttf")))
-    var arabic = require_instance(Font.Instance.create(arabic_face, size:20.0))
-    report("rtl", require_coverage(require_run(arabic.shape("سلام", Font.ShapeOptions(
+    var arabic_face = require_face((try Font.Face.decode(embed_bytes("../Tests/Fixtures/NotoSansArabic-Test.ttf"))))
+    var arabic = require_instance((try Font.Instance.create(arabic_face, size:20.0)))
+    report("rtl", require_coverage((try require_run((try arabic.shape("سلام", Font.ShapeOptions(
         direction:Font.Direction.right_to_left,
         script:"Arab",
         language:"ar"
-    ))).rasterize()))
+    )))).rasterize())))
 }

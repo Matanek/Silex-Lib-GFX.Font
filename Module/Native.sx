@@ -81,7 +81,7 @@ package struct ShapeData {
 }
 
 package func open(bytes:uint8[], face_index:int) Result<FaceData, Error> {
-    match verify_abi() {
+    match (try verify_abi()) {
         failure(error) => { return Result<FaceData, Error>.failure(error) }
         success => {}
     }

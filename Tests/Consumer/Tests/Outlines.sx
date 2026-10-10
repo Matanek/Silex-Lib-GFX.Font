@@ -9,14 +9,14 @@ func outline_face(result:Result<Font.Face, Font.Error>) Font.Face {
 }
 
 func outline_instance(face:Font.Face, size:float64 = 1.0, variations:Font.Variation[] = []) Font.Instance {
-    match Font.Instance.create(face, size:size, variations:variations) {
+    match (try Font.Instance.create(face, size:size, variations:variations)) {
         failure(error) => { panic(error.detail) }
         success(instance) => { return instance }
     }
 }
 
 func outline_run(instance:Font.Instance, text:str) Font.GlyphRun {
-    match instance.shape(text) {
+    match (try instance.shape(text)) {
         failure(error) => { panic(error.detail) }
         success(run) => { return run }
     }
@@ -111,9 +111,9 @@ func adapt_outline(outline:Font.GlyphOutline) ConsumerPath {
 }
 
 test "TrueType contours preserve quadratic curves holes closure and exact analytic bounds" {
-    var instance = outline_instance(outline_face(Font.Face.decode(embed_bytes("../../Fixtures/Minimal.ttf"))))
+    var instance = outline_instance(outline_face((try Font.Face.decode(embed_bytes("../../Fixtures/Minimal.ttf")))))
     var a_run = outline_run(instance, "A")
-    let a = required_outline(instance.outline(a_run.glyphs()[0].id))
+    let a = required_outline((try instance.outline(a_run.glyphs()[0].id)))
     assert(a.glyph_id == 34 as uint32)
     assert(a.contours.count() == 2)
     assert(close_count(a) == 2)
@@ -126,16 +126,16 @@ test "TrueType contours preserve quadratic curves holes closure and exact analyt
     assert(outline_approximate(a.bounds.height, 0.717))
     assert(a.advance.x > 0.0 && a.advance.y == 0.0)
 
-    let o = required_outline(instance.outline(outline_run(instance, "O").glyphs()[0].id))
-    let b = required_outline(instance.outline(outline_run(instance, "B").glyphs()[0].id))
+    let o = required_outline((try instance.outline(outline_run(instance, "O").glyphs()[0].id)))
+    let b = required_outline((try instance.outline(outline_run(instance, "B").glyphs()[0].id)))
     assert(close_count(o) == 2)
     assert(close_count(b) == 3)
 }
 
 test "CFF outlines retain cubic segments and renderer-independent em coordinates" {
-    var face = outline_face(Font.Face.decode(embed_bytes("../../Fixtures/SourceCodePro-Regular.otf")))
+    var face = outline_face((try Font.Face.decode(embed_bytes("../../Fixtures/SourceCodePro-Regular.otf"))))
     var instance = outline_instance(face)
-    let outline = required_outline(instance.outline(outline_run(instance, "A").glyphs()[0].id))
+    let outline = required_outline((try instance.outline(outline_run(instance, "A").glyphs()[0].id)))
     assert(outline.glyph_id == 2 as uint32)
     assert(close_count(outline) == 2)
     assert(cubic_count(outline) > 0)
@@ -146,8 +146,8 @@ test "CFF outlines retain cubic segments and renderer-independent em coordinates
 }
 
 test "consumer adapts the public outline without Native Boundary or Canvas" {
-    var instance = outline_instance(outline_face(Font.Face.decode(embed_bytes("../../Fixtures/Minimal.ttf"))))
-    let outline = required_outline(instance.outline(outline_run(instance, "B").glyphs()[0].id))
+    var instance = outline_instance(outline_face((try Font.Face.decode(embed_bytes("../../Fixtures/Minimal.ttf")))))
+    let outline = required_outline((try instance.outline(outline_run(instance, "B").glyphs()[0].id)))
     let path = adapt_outline(outline)
     assert(path.moves == 3)
     assert(path.closes == 3)
@@ -156,31 +156,31 @@ test "consumer adapts the public outline without Native Boundary or Canvas" {
 }
 
 test "composites marks spaces and unavailable glyphs remain distinguishable" {
-    var face = outline_face(Font.Face.default())
+    var face = outline_face((try Font.Face.default()))
     var instance = outline_instance(face)
-    let composite = required_outline(instance.outline(outline_run(instance, "é").glyphs()[0].id))
+    let composite = required_outline((try instance.outline(outline_run(instance, "é").glyphs()[0].id)))
     assert(close_count(composite) == 3)
     assert(composite.bounds.height > 0.7)
 
-    let mark = required_outline(instance.outline(outline_run(instance, "\u{0301}").glyphs()[0].id))
+    let mark = required_outline((try instance.outline(outline_run(instance, "\u{0301}").glyphs()[0].id)))
     assert(!mark.is_empty())
     assert(mark.bounds.y > 0.5)
 
-    let space = required_outline(instance.outline(outline_run(instance, " ").glyphs()[0].id))
+    let space = required_outline((try instance.outline(outline_run(instance, " ").glyphs()[0].id)))
     assert(space.is_empty())
     assert(space.bounds.width == 0.0 && space.bounds.height == 0.0)
 
-    match instance.outline((face.glyph_count() + 7) as uint32) {
+    match (try instance.outline((face.glyph_count() + 7) as uint32)) {
         failure(error) => { panic(error.detail) }
         success(outline) => { assert(outline == null) }
     }
 }
 
 test "run outlines preserve shaped ids origins clusters and em-to-logical transforms" {
-    var instance = outline_instance(outline_face(Font.Face.default()), size:18.0)
+    var instance = outline_instance(outline_face((try Font.Face.default())), size:18.0)
     var run = outline_run(instance, "a\u{0323}\u{0301}")
     let glyphs = run.glyphs()
-    let placed = require_placements(run.outlines())
+    let placed = require_placements((try run.outlines()))
     assert(placed.count() == glyphs.count())
     var index = 0
     while index < placed.count() {
@@ -200,15 +200,15 @@ test "run outlines preserve shaped ids origins clusters and em-to-logical transf
 }
 
 test "variation coordinates alter normalized outlines while logical size does not" {
-    var face = outline_face(Font.Face.default())
+    var face = outline_face((try Font.Face.default()))
     var light = outline_instance(face, size:12.0, variations:[Font.Variation("wght", 100.0)])
     var black = outline_instance(face, size:48.0, variations:[Font.Variation("wght", 900.0)])
-    let light_outline = required_outline(light.outline(outline_run(light, "A").glyphs()[0].id))
-    let black_outline = required_outline(black.outline(outline_run(black, "A").glyphs()[0].id))
+    let light_outline = required_outline((try light.outline(outline_run(light, "A").glyphs()[0].id)))
+    let black_outline = required_outline((try black.outline(outline_run(black, "A").glyphs()[0].id)))
     assert(light_outline.bounds.width != black_outline.bounds.width || light_outline.contours.count() != black_outline.contours.count())
 
     var same_variation = outline_instance(face, size:96.0, variations:[Font.Variation("wght", 100.0)])
-    let same_outline = required_outline(same_variation.outline(outline_run(same_variation, "A").glyphs()[0].id))
+    let same_outline = required_outline((try same_variation.outline(outline_run(same_variation, "A").glyphs()[0].id)))
     assert(same_outline.bounds.x == light_outline.bounds.x)
     assert(same_outline.bounds.width == light_outline.bounds.width)
     assert(same_outline.contours.count() == light_outline.contours.count())

@@ -1,10 +1,10 @@
 use GFX.Font
 
 func main() {
-    match Font.Face.default() {
+    match (try Font.Face.default()) {
         failure(error) => { panic(error.detail) }
         success(face) => {
-            match Font.Instance.create(face, size:18.0, variations:[Font.Variation("wght", 560.0)]) {
+            match (try Font.Instance.create(face, size:18.0, variations:[Font.Variation("wght", 560.0)])) {
                 failure(error) => { panic(error.detail) }
                 success(instance) => {
                     assert(instance.metrics().line_height > 18.0)

@@ -13,7 +13,8 @@ syntheses.
 silex install GFX.Font
 ```
 
-GFX.Font requires Silex 0.43.0 or newer.
+This development revision requires the toolchain with `try` capture for
+`Result` operations and extraction on ordinary calls.
 
 ## Load a face
 
@@ -25,7 +26,7 @@ file is moved or removed.
 use GFX.Font
 
 let bytes = embed_bytes("InterVariable.ttf")
-match Font.Face.decode(bytes) {
+match try Font.Face.decode(bytes) {
     failure(error) => { print(error.detail) }
     success(face) => {
         print(face.identity())
@@ -62,10 +63,10 @@ negative.
 NaN size and every invalid coordinate.
 
 ```sx
-match Font.Face.decode(embed_bytes("InterVariable.ttf")) {
+match try Font.Face.decode(embed_bytes("InterVariable.ttf")) {
     failure(error) => { print(error.detail) }
     success(face) => {
-        match Font.Instance.create(
+        match try Font.Instance.create(
             face,
             size:18.0,
             variations:[Font.Variation("wght", 560.0)]
@@ -103,7 +104,7 @@ and measurements. The call is fallible because feature tags and ranges depend
 on the text being shaped.
 
 ```sx
-match instance.shape(
+match try instance.shape(
     "office",
     Font.ShapeOptions(
         direction:Font.Direction.left_to_right,
@@ -171,10 +172,10 @@ resolved, bounds are analytic, nominal advance is available, and `fill_rule`
 is explicitly `non_zero` so counters remain holes.
 
 ```sx
-match instance.shape("Bé") {
+match try instance.shape("Bé") {
     failure(error) => { print(error.detail) }
     success(run) => {
-        match run.outlines() {
+        match try run.outlines() {
             failure(error) => { print(error.detail) }
             success(placed) => {
                 for glyph in placed {
@@ -214,7 +215,7 @@ Given a valid `run`, this fragment produces a density-2 mask with two physical
 pixels of padding:
 
 ```sx
-match run.rasterize(Font.RasterOptions(
+match try run.rasterize(Font.RasterOptions(
     density:2.0,
     hinting:Font.Hinting.normal,
     antialiasing:Font.Antialiasing.grayscale,
