@@ -17,6 +17,6 @@ silex install GFX.Font
 - [English documentation](Docs/EN/README.md)
 - [Reproduce the native artifacts](Native/README.md)
 
-The package requires Silex 0.43.0 or newer. It distributes Noto Sans Variable,
-Noto Sans Mono, and the retro pixel font Departure Mono, does not discover
+The package requires Silex 0.44.0 or newer. It distributes Noto Sans Variable,
+Noto Sans Mono, monochrome Noto Emoji, Noto Sans CJK SC, and the retro pixel font Departure Mono, does not discover
 system fonts, and exposes no FreeType or HarfBuzz handles.

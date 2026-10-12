@@ -1,0 +1,24 @@
+use GFX.Font
+func face(result:Result<Font.Face,Font.Error>) Font.Face {
+    match result { success(value) => { return value }; failure(error) => { panic(error.detail) } }
+}
+func instance(source:Font.Face) Font.Instance {
+    match (try Font.Instance.create(source,size:18.0)) {
+        success(value) => { return value }; failure(error) => { panic(error.detail) }
+    }
+}
+test "bundled emoji and CJK have stable identities and shape covered graphemes" {
+    var emoji = face((try Font.Face.emoji())); var cjk = face((try Font.Face.cjk()))
+    assert(emoji.identity() == face((try Font.Face.emoji())).identity())
+    assert(cjk.identity() == face((try Font.Face.cjk())).identity())
+    assert(emoji.supports(0x1f469 as uint32) && emoji.supports(0x1f4bb as uint32))
+    assert(cjk.supports(0x4e16 as uint32) && cjk.supports(0x754c as uint32))
+    var symbols = instance(emoji); var ideographs = instance(cjk)
+    for text in ["👩‍💻","👨‍👩‍👧‍👦","🇫🇷","👍🏽"] {
+        var run = symbols.shape(text)
+        assert(run.missing_glyph_count() == 0 && run.glyph_count() == 1)
+        assert(run.rasterize().width > 0)
+    }
+    var run = ideographs.shape("世界 日本語 한국어")
+    assert(run.missing_glyph_count() == 0 && run.rasterize().width > 0)
+}

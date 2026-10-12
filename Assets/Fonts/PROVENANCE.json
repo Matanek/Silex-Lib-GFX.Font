@@ -1,0 +1,38 @@
+[
+  {
+    "repository": "google/fonts",
+    "commit": "bd8f81ddb5c74d5c8897b36ad88b440266245103",
+    "source": "ofl/notoemoji/NotoEmoji[wght].ttf",
+    "path": "Assets/Fonts/NotoEmoji.ttf",
+    "sha256": "de6c18832938afc99caf132b39d6a30a19bac7f2e812e28db2535b4608d27551",
+    "bytes": 1982596,
+    "url": "https://raw.githubusercontent.com/google/fonts/bd8f81ddb5c74d5c8897b36ad88b440266245103/ofl/notoemoji/NotoEmoji%5Bwght%5D.ttf"
+  },
+  {
+    "repository": "google/fonts",
+    "commit": "bd8f81ddb5c74d5c8897b36ad88b440266245103",
+    "source": "ofl/notoemoji/OFL.txt",
+    "path": "Licenses/NotoEmoji.txt",
+    "sha256": "500bb1ccf43df7bbb522112f9133a52b16e1c35e809632f5d8609b179152de5b",
+    "bytes": 4330,
+    "url": "https://raw.githubusercontent.com/google/fonts/bd8f81ddb5c74d5c8897b36ad88b440266245103/ofl/notoemoji/OFL.txt"
+  },
+  {
+    "repository": "notofonts/noto-cjk",
+    "commit": "f8d157532fbfaeda587e826d4cd5b21a49186f7c",
+    "source": "Sans/OTF/SimplifiedChinese/NotoSansCJKsc-Regular.otf",
+    "path": "Assets/Fonts/NotoSansCJKsc-Regular.otf",
+    "sha256": "2c76254f6fc379fddfce0a7e84fb5385bb135d3e399294f6eeb6680d0365b74b",
+    "bytes": 16437364,
+    "url": "https://raw.githubusercontent.com/notofonts/noto-cjk/f8d157532fbfaeda587e826d4cd5b21a49186f7c/Sans/OTF/SimplifiedChinese/NotoSansCJKsc-Regular.otf"
+  },
+  {
+    "repository": "notofonts/noto-cjk",
+    "commit": "f8d157532fbfaeda587e826d4cd5b21a49186f7c",
+    "source": "Sans/LICENSE",
+    "path": "Licenses/NotoCJK.txt",
+    "sha256": "6a73f9541c2de74158c0e7cf6b0a58ef774f5a780bf191f2d7ec9cc53efe2bf2",
+    "bytes": 4301,
+    "url": "https://raw.githubusercontent.com/notofonts/noto-cjk/f8d157532fbfaeda587e826d4cd5b21a49186f7c/Sans/LICENSE"
+  }
+]

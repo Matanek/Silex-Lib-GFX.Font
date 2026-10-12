@@ -285,6 +285,15 @@ pixels exacte, employer de préférence des tailles logiques multiples de 11.
 Les fichiers et leurs licences SIL Open Font License se trouvent dans
 `Assets/Fonts` et `Licenses`.
 
+`Face.emoji()` ouvre Noto Emoji monochrome et `Face.cjk()` ouvre Noto Sans CJK
+SC Regular. La seconde couvre idéogrammes, kana et hangul avec les formes
+régionales du chinois simplifié ; une application voulant les variantes
+typographiques japonaises ou coréennes peut charger sa propre face. Les séquences
+emoji prises en charge sont façonnées avec leurs ligatures, joiners, modificateurs
+et indicateurs régionaux. Leur rasterisation reste une couverture alpha : pas
+de couleurs natives d’emoji. Les deux faces sont distribuées intégralement,
+avec leurs licences et empreintes dans Assets/Fonts/PROVENANCE.json.
+
 GFX.Font ne cherche pas les fontes installées sur la machine et ne télécharge
 rien. Une application compose ses faces à partir de ses assets et de chemins
 explicites.

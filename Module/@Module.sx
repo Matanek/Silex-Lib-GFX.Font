@@ -570,6 +570,20 @@ public class Face {
         ))
     }
 
+    static func emoji() Result<Face, Error> {
+        return (try Face.bundled(
+            embed_bytes("../Assets/Fonts/NotoEmoji.ttf"),
+            "de6c18832938afc99caf132b39d6a30a19bac7f2e812e28db2535b4608d27551"
+        ))
+    }
+
+    static func cjk() Result<Face, Error> {
+        return (try Face.bundled(
+            embed_bytes("../Assets/Fonts/NotoSansCJKsc-Regular.otf"),
+            "2c76254f6fc379fddfce0a7e84fb5385bb135d3e399294f6eeb6680d0365b74b"
+        ))
+    }
+
     static func pixel() Result<Face, Error> {
         return (try Face.bundled(
             embed_bytes("../Assets/Fonts/DepartureMono-Regular.otf"),
