@@ -1,15 +1,15 @@
 {
   "name": "GFX.Font",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": {
     "en": "Portable font faces, shaping foundations, vector outlines, and hinted coverage for GFX.",
     "fr": "Faces de fonte portables, socle de shaping, contours vectoriels et couvertures hintées pour GFX."
   },
   "authors": ["Matanek"],
-  "requires": { "silex": ">=0.44.0" },
+  "requires": { "silex": ">=0.48.0" },
   "dependencies": {
-    "GFX": "^0.40.0",
-    "STD": "^0.22.0"
+    "GFX": "^0.41.0",
+    "STD": "^0.23.0"
   },
   "boundary": {
     "macos-arm64": {
