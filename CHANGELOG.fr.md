@@ -1,6 +1,6 @@
 # Historique
 
-## [0.2.0] - 2026-11-08
+## [0.2.0] - 2026-11-09
 
 - Distribuer Noto Emoji monochrome et Noto Sans CJK SC avec leurs licences et provenance ; Face.emoji() et Face.cjk() ouvrent les faces embarquées sans recherche système.
 

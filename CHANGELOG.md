@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.2.0] - 2026-11-08
+## [0.2.0] - 2026-11-09
 
 - Bundle monochrome Noto Emoji and Noto Sans CJK SC with licenses and provenance; Face.emoji() and Face.cjk() open the bundled faces without system font discovery.
 
